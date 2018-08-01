@@ -1,40 +1,3 @@
-#!/usr/bin/env python
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-#
-# Copyright (c) 2013-2018 ProphetStor Data Services, Inc.
-# All Rights Reserved.
-#
-"""
-ProphetStor Predictive Data Adapter
-"""
-# Get configuration and logger
-
-import datetime
-from httplib import OK
-import re
-import sys
-import time
-import traceback
-
-import arcservecmd
-import config
-import define
-import diskevent
-from dpclient import ConfigError
-from dpclient import DbError
-import logalert
-import logger
-import mailalert
-from pdaclient import PdaApi
-import policymanager
-import rawcmd
-import smsalert
-
-
-_conf = config.get_config()
-_logger = logger.get_logger()
-
-
 def action_distributor(action_list, action_dict):
     for i in action_list:
         for key, val in action_dict.iteritems():
@@ -43,34 +6,22 @@ def action_distributor(action_list, action_dict):
 
 
 def main():
-    global _conf
     last_time = 0
-    conf_modify_time = 0
     reload_time = 6
     while True:
         pda_api = PdaApi()
         try:
             while True:
-                try:
-                    if _conf.isUpdated():
-                        _conf = config.reload_config()
-                        logger.reload_debuglevel()
-                        dt = datetime.datetime.fromtimestamp(_conf.modify_time)
-                        _logger.info("Configuration modified: %s" %
-                                     dt.strftime('%Y-%m-%d %H:%M:%S'))
-                except Exception:
-                    _logger.error("Check config file error.")
-                else:
-                    enabled = _conf.getboolean('main', 'main.enabled', False)
-                    if enabled:
-                        interval = _conf.getint('main', 'main.interval', 3600)
-                        reload_time = _conf.getint(
-                            'main', 'main.interval.reload', 60)
-                        current_time = time.time()
-                        next_time = last_time + interval
-                        if current_time >= next_time:
-                            last_time = current_time
-                            break
+                enabled = _conf.getboolean('main', 'main.enabled', False)
+                if enabled:
+                    interval = _conf.getint('main', 'main.interval', 3600)
+                    reload_time = _conf.getint(
+                        'main', 'main.interval.reload', 60)
+                    current_time = time.time()
+                    next_time = last_time + interval
+                    if current_time >= next_time:
+                        last_time = current_time
+                        break
 
                 time.sleep(reload_time)
 
@@ -135,9 +86,7 @@ def main():
 
         except Exception:
             retcode = 1
-            _logger.exception(define.PRODUCT_NAME)
-            print traceback.format_exc()
-
+            
         time.sleep(10)
 
     sys.exit(retcode)
