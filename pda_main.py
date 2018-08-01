@@ -51,24 +51,6 @@ def main():
         pda_api = PdaApi()
         try:
             while True:
-                # update status of PDA service
-                status, data = pda_api.update_instance()
-                if status == OK:
-                    # get last modified time of configuration
-                    api_conf_time = data.get('configs', {}).get(
-                        'pda.conf.user', {}).get('lastUpdated', 0)
-
-                    if api_conf_time > conf_modify_time:
-                        # download new configuration
-                        pda_api.download_config()
-                        conf_modify_time = api_conf_time
-
-                        dt = datetime.datetime.fromtimestamp(conf_modify_time)
-                        _logger.info("Configuration downloaded: %s" %
-                                     dt.strftime('%Y-%m-%d %H:%M:%S'))
-
-                # reload configuration
-
                 try:
                     if _conf.isUpdated():
                         _conf = config.reload_config()
