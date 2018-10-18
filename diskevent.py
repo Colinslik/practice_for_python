@@ -97,7 +97,7 @@ class DiskEvent(Event_Manager):
         vm_datastore_list = []
         guestdomainid_datastore = {}
 
-        relation_conn = Neo4jTool(self.host)
+        relation_conn = dpclient.Neo4jTool(self.host)
         vm_datastore = relation_conn.query_by_label_rels(
             vm_hosts,
             "VMHost", ["VmHostHasVmDatastore"],
@@ -142,7 +142,7 @@ class DiskEvent(Event_Manager):
                         guestdomainid_datastore[vm].append(
                             host["Datastores"].keys()[0])
 
-        prediction_conn = InfluxdbTool(self.host)
+        prediction_conn = dpclient.InfluxdbTool(self.host)
         prediction_conn.set_display(["guest_hostname", "guest_ips",
                                      "name", "domain_id"])
         vmlist_result = prediction_conn.query_vm_host(
@@ -213,7 +213,7 @@ class DiskEvent(Event_Manager):
         windows_disks = {}
         vm_disks = {}
 
-        relation_conn = Neo4jTool(self.host)
+        relation_conn = dpclient.Neo4jTool(self.host)
         host_dict = relation_conn.query_nodes(
             "VMHost", "name", self._host_list, cond_dict)
 
@@ -242,7 +242,7 @@ class DiskEvent(Event_Manager):
                     self._host_list.remove(hostname)
                 self._ip_dict.pop(hostname)
 
-        relation_conn = Neo4jTool(self.host)
+        relation_conn = dpclient.Neo4jTool(self.host)
 
         if windows_hosts:
             windows_disks.update(relation_conn.query_by_label_rels(
@@ -269,7 +269,7 @@ class DiskEvent(Event_Manager):
                 {hostname: {"host_ip": None, "os_type": None, "vm_name": None}})
         end_time = int(time.time() * 1000000000)
         start_time = end_time - (3600 * 12 * 1000000000)
-        prediction_conn = InfluxdbTool(self.host)
+        prediction_conn = dpclient.InfluxdbTool(self.host)
         prediction_conn.set_display(["domain_id", "host_ip", "os_type"])
         result = prediction_conn.query_ip_by_host(
             [start_time, end_time], domainid_hosts.keys())
@@ -288,7 +288,7 @@ class DiskEvent(Event_Manager):
         return ip_dict
 
     def query_prediction(self, disk_watchdog):
-        prediction_conn = InfluxdbTool(self.host)
+        prediction_conn = dpclient.InfluxdbTool(self.host)
         end_time = int(time.time() * 1000000000)
         start_time = end_time - (3600 * 12 * 1000000000)
         self._prediction_result = prediction_conn.query_pred_interval_by_disk([
@@ -325,7 +325,7 @@ class DiskEvent(Event_Manager):
             "8": "SAS",
             "9": "SATA",
         }
-        prediction_conn = InfluxdbTool(self.host)
+        prediction_conn = dpclient.InfluxdbTool(self.host)
         prediction_conn.set_display(["*", "disk_domain_id"])
         diskinfo_result = prediction_conn.query_disk_info(
             "sai_disk", disk_watchdog, ["disk_domain_id"])
@@ -528,314 +528,6 @@ class DiskEvent(Event_Manager):
                             if diskinfo["near_failure"] == self._nearfailure:
                                 vm_host_info.update(target)
             return vm_host_info
-
-
-class Neo4jTool(dpclient.Neo4jApi):
-    """
-    DiskProphet connector V1 API
-    """
-
-    if not ifttt:
-        def __init__(self, host="127.0.0.1"):
-            super(Neo4jTool, self).__init__(host)
-    else:
-        def __init__(self, host="127.0.0.1", port=7474, user="neo4j", password="na"):
-            super(Neo4jTool, self).__init__(host, port, user, password)
-
-    def query_nodes(self, label="VMVirtualMachine", key="domainId", val=[],
-                    cond_dict={}):
-        result = self._send_cmd(self._detail_setup(
-            label, None, key, val, cond_dict,
-            None, None, None, None))
-
-        try:
-            encoded = json.loads(result.text, encoding='utf-8')
-            if "id" in encoded["results"][0]["data"][0]["graph"]["nodes"][0]:
-                pass
-        except Exception:
-            msg = "Neo4jApi Get no results ( {0}.{1} )".format(
-                self.__class__.__name__,
-                self.query_nodes.__name__)
-            if not ifttt:
-                _logger.error("Get no results from DiskProphet.")
-            else:
-                print "Get no results from DiskProphet."
-            raise dpclient.DbError(msg)
-        else:
-            encoded_list = []
-            for i in encoded["results"][0]["data"]:
-                encoded_list.append(i["graph"]["nodes"][0]["properties"])
-
-        return encoded_list
-
-    def query_by_label_rels(self, vms=[], label="VMVirtualMachine",
-                            rels=None, cond_dict={},
-                            tag="domainId", output_tag="domainId"):
-        if rels:
-            left_rel = ""
-            right_rel = ""
-            result_type = " n"
-            for idx, rel in enumerate(rels):
-                left_rel += "-[r{1}:{0}]->(t{1})".format(rel, idx)
-                right_rel += "<-[r{1}:{0}]-(t{1})".format(rel, idx)
-                result_type += ",r{0},t{0}".format(idx)
-            _rels = [left_rel, right_rel]
-        else:
-            _rels = ["-[r*]->(t)", "<-[r*]-(t)"]
-            result_type = " n,r,t"
-        params = ""
-        arranged = {}
-
-        for i in _rels:
-            params = self._detail_setup(
-                label, i, None, None, None,
-                self._query_id_by_key(label, tag, vms, cond_dict),
-                result_type, None, params)
-
-        result = self._send_cmd(params)
-
-        try:
-            encoded = json.loads(result.text, encoding='utf-8')
-            if tag in encoded["results"][0][
-                    "data"][0]["graph"]["nodes"][0]["properties"]:
-                pass
-        except Exception:
-            msg = "Neo4jApi Get no results ( {0}.{1} )".format(
-                self.__class__.__name__,
-                self.query_by_label_rels.__name__)
-            if not ifttt:
-                _logger.error("Get no results from DiskProphet.")
-            else:
-                print "Get no results from DiskProphet."
-            raise dpclient.DbError(msg)
-        else:
-            labels_pool = {}
-            target = {}
-            key = ""
-            count = 0
-            for i in encoded["results"][0]["data"]:
-                for j in i["graph"]["nodes"]:
-                    labels_pool[str(j["labels"][0])] = str(
-                        j["properties"][output_tag])
-
-                key = labels_pool.get(label)
-                if key in arranged:
-                    pass
-                else:
-                    arranged[key] = {}
-                target = arranged.get(key)
-                count += 1
-
-                if "VMDatastore" in labels_pool:
-                    key = labels_pool.get("VMDatastore")
-                    if "Datastores" not in target:
-                        target["Datastores"] = {}
-                    if key in target["Datastores"]:
-                        pass
-                    else:
-                        target["Datastores"][key] = {"Disks": {}}
-
-                if "VMDisk" in labels_pool:
-                    if "VMDatastore" in labels_pool:
-                        key = labels_pool.get("VMDatastore")
-                    else:
-                        key = "None_#{0}".format(count)
-                    if "Datastores" not in target:
-                        target["Datastores"] = {}
-                    if key in target["Datastores"]:
-                        pass
-                    else:
-                        target["Datastores"][key] = {"Disks": {}}
-                    target["Datastores"][key]["Disks"][
-                        labels_pool.get("VMDisk")] = {"Groups": ""}
-
-                if "VMVSanDiskGroup" in labels_pool:
-                    if "VMDisk" in labels_pool:
-                        key_disks = labels_pool.get("VMDisk")
-                    else:
-                        key_disks = "None_#{0}".format(count)
-                    if "VMDatastore" in labels_pool:
-                        key = labels_pool.get("VMDatastore")
-                    else:
-                        key = "None_#{0}".format(count)
-                    if "Datastores" not in target:
-                        target["Datastores"] = {}
-                    if key not in target["Datastores"]:
-                        target["Datastores"][key] = {"Disks": {}}
-                    if key_disks not in target["Datastores"][key]["Disks"]:
-                        target["Datastores"][key]["Disks"][key_disks] = {
-                            "Groups": ""}
-                    target["Datastores"][key]["Disks"][key_disks]["Groups"] = \
-                        labels_pool.get("VMVSanDiskGroup")
-
-                if "VMVirtualMachine" in labels_pool:
-                    key = labels_pool.get("VMVirtualMachine")
-                    if "VMs" not in target:
-                        target["VMs"] = []
-                    if key not in target["VMs"]:
-                        target["VMs"].append(key)
-
-                if "VMClusterCenter" in labels_pool:
-                    if "Clusters" not in target:
-                        target["Clusters"] = {}
-                    target["Clusters"][labels_pool.get(
-                        "VMClusterCenter")] = {"Types": "Cluster"}
-
-                if "VMHost" in labels_pool:
-                    if "Clusters" not in target:
-                        target["Clusters"] = {}
-                    target["Clusters"][labels_pool.get(
-                        "VMHost")] = {"Types": "Host"}
-
-                labels_pool.clear()
-
-            return arranged
-
-    def _query_id_by_key(self, label, key, val,
-                         cond_dict={}):
-        params = self._detail_setup(
-            label, None, key, val, cond_dict,
-            None, None, None, None)
-        result = self._send_cmd(params)
-
-        try:
-            encoded = json.loads(result.text, encoding='utf-8')
-            if "id" in encoded["results"][0]["data"][0]["graph"]["nodes"][0]:
-                pass
-        except Exception:
-            msg = "Neo4jApi Get no results ( {0}.{1} )".format(
-                self.__class__.__name__,
-                self._query_id_by_key.__name__)
-            if not ifttt:
-                _logger.error("Get no results from DiskProphet.")
-            else:
-                print "Get no results from DiskProphet."
-            raise dpclient.DbError(msg)
-        else:
-            encoded_list = []
-            for i in encoded["results"][0]["data"]:
-                encoded_list.append(str(i["graph"]["nodes"][0]["id"]))
-
-            return encoded_list
-
-
-class InfluxdbTool(dpclient.InfluxdbApi):
-    """
-    DiskProphet connector V1 API
-    """
-
-    if not ifttt:
-        def __init__(self, host="127.0.0.1"):
-            super(InfluxdbTool, self).__init__(host)
-    else:
-        def __init__(self, host="127.0.0.1", port="8086", user="dpInfluxdb", password="DpPassw0rd"):
-            super(InfluxdbTool, self).__init__(host, port, user, password)
-
-    def query_vm_host(self, composite_cmd="virtualmachine",
-                      entry_list=None, group=None):
-        if entry_list:
-            entry_list_pkg = ["domain_id", entry_list]
-        else:
-            entry_list_pkg = entry_list
-        return self.query_data_detail_setup(composite_cmd,
-                                            None,
-                                            entry_list_pkg, group, None,
-                                            1, True, True)
-
-    def query_disk_info(self, composite_cmd="sai_disk",
-                        entry_list=None, group=None):
-        if entry_list:
-            entry_list_pkg = ["disk_domain_id", entry_list]
-        else:
-            entry_list_pkg = entry_list
-        return self._postprocess_to_filter_id(
-            self.query_data_detail_setup(composite_cmd,
-                                         None,
-                                         entry_list_pkg, group, None,
-                                         1, True, True))
-
-    def query_ip_by_host(self, time_interval, entry_list=None):
-        ip_dict = {}
-        filter_list = ["domain_id", entry_list]
-        try:
-            result = self.query_data_detail_setup("sai_host",
-                                                  time_interval,
-                                                  filter_list, None, None,
-                                                  None, True, True)
-        except dpclient.DbError:
-            msg = "InfluxdbApi Get no results ( {0}.{1} )" \
-                " Your URL is {2}".format(
-                    self.__class__.__name__,
-                    self.query_data_detail_setup.__name__, self.url)
-            if not ifttt:
-                _logger.error("Get no results from DiskProphet.")
-            else:
-                print "Get no results from DiskProphet."
-            raise dpclient.DbError(msg)
-
-        else:
-            key_list = []
-            for key in result.keys():
-                if "domain_id" != key:
-                    key_list.append(key)
-            for i in range(len(result["domain_id"])):
-                if result["domain_id"][i][0] not in ip_dict:
-                    ip_dict.update({result["domain_id"][i][0]: {}})
-                target = ip_dict[result["domain_id"][i][0]]
-                for j in key_list:
-                    target.update({j: result[j][i]})
-            return ip_dict
-
-    def query_pred_interval_by_disk(self, time_interval, entry_list=None):
-        if entry_list:
-            entry_list_pkg = ["disk_domain_id", entry_list]
-        else:
-            entry_list_pkg = entry_list
-        return self._postprocess_to_filter_id(
-            self.query_data_detail_setup('sai_disk_prediction',
-                                         time_interval,
-                                         entry_list_pkg, None, None,
-                                         None, True, True))
-
-    def _postprocess_to_filter_id(self, pre_result):
-        pos_result = {}
-
-        # except for instruction error
-        if pre_result is None:
-            msg = "InfluxdbApi Get no results ( {0}.{1} )" \
-                " Your URL is {2}".format(
-                    self.__class__.__name__,
-                    self.query_data_detail_setup.__name__, self.url)
-            if not ifttt:
-                _logger.error("Get no results from DiskProphet.")
-            else:
-                print "Get no results from DiskProphet."
-            raise dpclient.DbError(msg)
-
-        for idx, val in enumerate(pre_result.get('disk_domain_id')):
-            if val[0] not in pos_result:
-                pos_result[val[0]] = {}
-
-            if pre_result.get(
-                    'host_domain_id')[idx][0] not in pos_result[val[0]]:
-                pos_result[val[0]][
-                    pre_result.get('host_domain_id')[idx][0]] = {}
-
-            target_host = pos_result[val[0]][
-                pre_result.get('host_domain_id')[idx][0]]
-
-            if pre_result.get('time')[idx][0] not in target_host:
-                target_host[pre_result.get('time')[idx][0]] = {}
-
-            target = target_host[pre_result.get('time')[idx][0]]
-
-            keyslist = [x for x in pre_result.keys() if x not in [
-                'disk_domain_id', 'host_domain_id', 'time']]
-
-            for key in keyslist:
-                target.update({key: [' '.join(pre_result.get(key)[idx])]})
-
-        return pos_result
 
 
 if __name__ == '__main__':
