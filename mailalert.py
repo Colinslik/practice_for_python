@@ -67,6 +67,7 @@ class MailAlert(object):
         return mail_dict
 
     def get_mail_dict(self, send_list):
+        self.mail_dict = {}
         for mail_data in send_list:
             if mail_data[0] not in self.mail_dict:
                 self.mail_dict.update(
@@ -77,7 +78,9 @@ class MailAlert(object):
                     {
                         mail_data[3].keys()[0]: {
                             "disks": [],
-                            "display": mail_data[2]["display"]}})
+                            "display": mail_data[2]["display"],
+                            "policy_name": mail_data[2]["policy_name"],
+                            "policy_status": mail_data[2]["policy_status"]}})
             target = target_host[mail_data[3].keys()[0]]
             for disk_list in mail_data[3].values():
                 for disk, status in disk_list.iteritems():
@@ -88,10 +91,14 @@ class MailAlert(object):
         if not self.smtp:
             if send_list:
                 _logger.warning("[MailAlert] SMTP info is not sufficient.")
-                eventdb_conn = EventDb()
-                for mail_data in send_list:
-                    eventdb_conn.push_queue(mail_data[4])
+            return None
+        elif send_list:
+            eventdb_conn = EventDb()
+            for mail_data in send_list:
+                eventdb_conn.push_queue(mail_data[4])
                 eventdb_conn.db_streaming()
+                mail_data[4]["status"] = mail_data[4]["status_failed"]
+        else:
             return None
         try:
             self.get_mail_dict(send_list)
@@ -104,6 +111,10 @@ class MailAlert(object):
                     **self.mail_dict[mail_data[0]][mail_data[3].keys()[0]])
                 msg['Subject'] = "%s" % Header(subject, 'utf-8')
 
+                host_vm_name = "{0} ({1})".format(
+                    mail_data[1].keys()[0], mail_data[1].values()[0]["vm_name"]) \
+                    if mail_data[1].values()[0]["vm_name"] \
+                    else "{0}".format(mail_data[1].keys()[0])
                 disk_status = ""
                 for disk in self.mail_dict[
                     mail_data[0]][
@@ -112,8 +123,14 @@ class MailAlert(object):
                         disk_status += "{0} ({1}), ".format(
                             status["disk_name"], status["near_failure"])
 
-                replaced = {"host": mail_data[3].keys()[0],
-                            "disks": disk_status[:-2]}
+                replaced = {"host": host_vm_name + '\n',
+                            "disks": disk_status[:-2],
+                            "policy_name":
+                            self.mail_dict[mail_data[0]][
+                                mail_data[3].keys()[0]]["policy_name"] + '\n',
+                            "policy_status":
+                            self.mail_dict[mail_data[0]][
+                                mail_data[3].keys()[0]]["policy_status"]}
                 body = self.mail_format[mail_data[0]]["body"].format(
                     **replaced)
                 msg.attach(MIMEText(body, 'plain', 'UTF-8'))
@@ -130,7 +147,7 @@ class MailAlert(object):
                 if retcode == OK:
                     _logger.info(
                         "[MailAlert] Successfully sent email.")
-                    mail_data[4]["status"] = mail_data[4]["status_change"]
+                    mail_data[4]["status"] = mail_data[4]["status_succeeded"]
                 else:
                     _logger.error("[MailAlert] Failed to send mail.")
                     _logger.debug("retcode %d" % (retcode))

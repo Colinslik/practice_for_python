@@ -87,7 +87,7 @@ class ArcserveApi(object):
             if not std_err:
                 action_result = "Completed"
                 if event_data:
-                    event_data["status"] = event_data["status_change"]
+                    event_data["status"] = event_data["status_succeeded"]
             else:
                 action_result = "Failed"
             _logger.info("[%s] %s" % (action_result, cmd))
@@ -157,10 +157,14 @@ class ArcserveApi(object):
                     "[AcrserveCommand] Server info is not sufficient.")
                 _logger.debug(
                     "[AcrserveCommand] host:%s user:%s" % (self.host, self.user))
-                eventdb_conn = EventDb()
-                for act_data in action_list:
-                    eventdb_conn.push_queue(act_data[4])
+            return None
+        elif action_list:
+            eventdb_conn = EventDb()
+            for act_data in action_list:
+                eventdb_conn.push_queue(act_data[4])
                 eventdb_conn.db_streaming()
+                act_data[4]["status"] = act_data[4]["status_failed"]
+        else:
             return None
         cmd_list = []
         timeout_list = []
@@ -170,6 +174,10 @@ class ArcserveApi(object):
             try:
                 command = _conf.get(act_data[0], 'command', '')
                 timeout = _conf.getint(act_data[0], 'timeout', self.timeout)
+                host_vm_name = "{0} ({1})".format(
+                    act_data[1].keys()[0], act_data[1].values()[0]["vm_name"]) \
+                    if act_data[1].values()[0]["vm_name"] \
+                    else "{0}".format(act_data[1].keys()[0])
                 self.current_host = act_data[1]
                 variable_list = self.variable_extraction(command)
                 if not variable_list:
@@ -200,21 +208,21 @@ class ArcserveApi(object):
                         timeout_list.append(timeout)
                         event_list.append(act_data[4])
                         _logger.info("[%s] Run %s: %s" %
-                                     (self.current_host.keys()[0],
+                                     (host_vm_name,
                                       self.mode_name, cmd))
                     else:
                         eventdb_conn = EventDb()
                         eventdb_conn.push_queue(act_data[4])
                         eventdb_conn.db_streaming()
                         _logger.error("[%s] Failed to run %s: %s. Please check whether arguments are enough or not." %
-                                      (self.current_host.keys()[0],
+                                      (host_vm_name,
                                        self.mode_name, command))
             except Exception:
                 eventdb_conn = EventDb()
                 eventdb_conn.push_queue(act_data[4])
                 eventdb_conn.db_streaming()
                 _logger.error("[%s] Failed to run %s: %s. Argument is not found." %
-                              (self.current_host.keys()[0],
+                              (host_vm_name,
                                self.mode_name, command))
         for idx, val in enumerate(cmd_list):
             process_list.append(

@@ -86,7 +86,7 @@ class RawCmdApi(object):
             if not std_err:
                 action_result = "Completed"
                 if event_data:
-                    event_data["status"] = event_data["status_change"]
+                    event_data["status"] = event_data["status_succeeded"]
             else:
                 action_result = "Failed"
             _logger.info("[%s] %s" % (action_result, cmd))
@@ -125,10 +125,14 @@ class RawCmdApi(object):
                 _logger.warning("[RawCommand] Server info is not sufficient.")
                 _logger.debug(
                     "[RawCommand] host:%s user:%s" % (self.host, self.user))
-                eventdb_conn = EventDb()
-                for act_data in action_list:
-                    eventdb_conn.push_queue(act_data[4])
+            return None
+        elif action_list:
+            eventdb_conn = EventDb()
+            for act_data in action_list:
+                eventdb_conn.push_queue(act_data[4])
                 eventdb_conn.db_streaming()
+                act_data[4]["status"] = act_data[4]["status_failed"]
+        else:
             return None
         cmd_list = []
         timeout_list = []
@@ -141,8 +145,13 @@ class RawCmdApi(object):
             cmd_list.append(command)
             timeout_list.append(timeout)
             event_list.append(act_data[4])
+
+            host_vm_name = "{0} ({1})".format(
+                act_data[1].keys()[0], act_data[1].values()[0]["vm_name"]) \
+                if act_data[1].values()[0]["vm_name"] \
+                else "{0}".format(act_data[1].keys()[0])
             _logger.info("[%s] Run %s: %s" %
-                         (self.current_host.keys()[0],
+                         (host_vm_name,
                           self.mode_name,  command))
         for idx, val in enumerate(cmd_list):
             process_list.append(
@@ -154,9 +163,9 @@ class RawCmdApi(object):
     def noop_action(self, action_list):
         eventdb_conn = EventDb()
         for act_data in action_list:
-            act_data[4]["status"] = act_data[4]["status_change"]
+            act_data[4]["status"] = act_data[4]["status_succeeded"]
             eventdb_conn.push_queue(act_data[4])
-        eventdb_conn.db_streaming()
+            eventdb_conn.db_streaming()
 
 
 if __name__ == '__main__':

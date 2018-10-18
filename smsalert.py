@@ -80,6 +80,7 @@ class SmsAlert(object):
         return sms_dict
 
     def get_sms_dict(self, send_list):
+        self.sms_dict = {}
         for sms_data in send_list:
             if sms_data[0] not in self.sms_dict:
                 self.sms_dict.update(
@@ -90,7 +91,9 @@ class SmsAlert(object):
                     {
                         sms_data[3].keys()[0]: {
                             "disks": [],
-                            "display": sms_data[2]["display"]}})
+                            "display": sms_data[2]["display"],
+                            "policy_name": sms_data[2]["policy_name"],
+                            "policy_status": sms_data[2]["policy_status"]}})
             target = target_host[sms_data[3].keys()[0]]
             for disk_list in sms_data[3].values():
                 for disk, status in disk_list.iteritems():
@@ -101,14 +104,22 @@ class SmsAlert(object):
         if not self.sms:
             if send_list:
                 _logger.warning("[SmsAlert] SMS info is not sufficient.")
-                eventdb_conn = EventDb()
-                for sms_data in send_list:
-                    eventdb_conn.push_queue(sms_data[4])
+            return None
+        elif send_list:
+            eventdb_conn = EventDb()
+            for sms_data in send_list:
+                eventdb_conn.push_queue(sms_data[4])
                 eventdb_conn.db_streaming()
+                sms_data[4]["status"] = sms_data[4]["status_failed"]
+        else:
             return None
         try:
             self.get_sms_dict(send_list)
             for sms_data in send_list:
+                host_vm_name = "{0} ({1})".format(
+                    sms_data[1].keys()[0], sms_data[1].values()[0]["vm_name"]) \
+                    if sms_data[1].values()[0]["vm_name"] \
+                    else "{0}".format(sms_data[1].keys()[0])
                 disk_status = ""
                 for disk in self.sms_dict[
                     sms_data[0]][
@@ -117,10 +128,16 @@ class SmsAlert(object):
                         disk_status += "{0} ({1}), ".format(
                             status["disk_name"], status["near_failure"])
 
-                replaced = {"host": sms_data[3].keys()[0],
+                replaced = {"host": host_vm_name,
                             "disks": disk_status[:-2],
                             "display": self.sms_dict[
-                                sms_data[0]][sms_data[3].keys()[0]]["display"]}
+                                sms_data[0]][sms_data[3].keys()[0]]["display"] + '\n',
+                            "policy_name":
+                            self.sms_dict[sms_data[0]][
+                                sms_data[3].keys()[0]]["policy_name"],
+                            "policy_status":
+                            self.sms_dict[sms_data[0]][
+                                sms_data[3].keys()[0]]["policy_status"]}
 
                 body = self.sms_format[sms_data[0]]["body"].format(
                     **replaced)
@@ -139,7 +156,7 @@ class SmsAlert(object):
                 if status == OK or status == CREATED:
                     _logger.info(
                         "[SmsAlert] Successfully sent message.")
-                    sms_data[4]["status"] = sms_data[4]["status_change"]
+                    sms_data[4]["status"] = sms_data[4]["status_succeeded"]
                 else:
                     _logger.error("[SmsAlert] Failed to send message.")
                     _logger.debug("status %d" % (status))

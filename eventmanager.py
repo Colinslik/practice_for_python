@@ -4,9 +4,14 @@
 # All Rights Reserved.
 #
 
+from datetime import datetime
+from httplib import OK, CREATED, NOT_FOUND
+import platform
+import time
+
 import config
-import dpclient
 import logger
+import pdaclient
 
 
 # Get configuration and logger
@@ -107,17 +112,19 @@ class EventDb(object):
     def db_streaming(self):
         for i in self._eventqueue:
             self.send_eventdb(i["job_id"], i["pda_server"], i["policy"],
-                              i["eventname"], i["hostname"], i["diskname"],
-                              i["severity"], i["status"], i["action"],
-                              i["action_result"], i["reason"])
+                              i["eventname"], i["hostname"], i["vm_name"],
+                              i["diskname"], i["severity"], i["status"],
+                              i["action"], i["action_result"], i["reason"])
+        self._eventqueue = []
 
     def send_eventdb(self, job_id, pda_server, policy, eventname,
-                     hostname, diskname, severity, status, action,
-                     action_result, reason):
-        tag_dict = {"pda_server": pda_server}
+                     hostname, vm_name, diskname, severity, status,
+                     action, action_result, reason):
         field_dict = {"job_id": job_id,
+                      "pda_server": pda_server,
                       "event": eventname,
                       "host_name": hostname,
+                      "vm_name": vm_name,
                       "disk_name": diskname,
                       "severity": severity,
                       "policy": policy,
@@ -127,7 +134,7 @@ class EventDb(object):
                       "reason": reason}
 
         eventdb_conn = EventDBTool()
-        eventdb_conn.setup_cmd(tag_dict, field_dict)
+        eventdb_conn.setup_cmd(field_dict)
 
     def push_queue(self, event_dict):
         self._eventqueue.append(event_dict)
@@ -136,93 +143,176 @@ class EventDb(object):
         return self._eventqueue
 
 
-class EventDBTool(dpclient.InfluxdbApi):
+class EventDBTool(pdaclient.PdaApi):
     """
-    InfluxDB Tool V1 API
+    PDA EVENTDB Tool V1 API
     """
 
     def __init__(self):
         super(EventDBTool, self).__init__()
         self.tablename = "pda_jobs"
 
-    def query_job_id_lastest(self, filter_dict):
+    def query_job_id_lastest(self):
         try:
-            self.set_display("max(job_id)")
-            result = self.query_data_detail_setup(self.tablename,
-                                                  None,
-                                                  filter_dict, None, None,
-                                                  None, True, True)
-        except dpclient.DbError:
-            return 0
+            url = "%s/%s/jobs?columns='',max(job_id),''" % (
+                self.endpoint, platform.node())
 
-        else:
-            job_id = int(result["max"][0][0])
+            params = {}
+
+            status, data, _ = self._send_cmd(
+                'GET', url, params, [OK], json_content=True)
+
+            if status not in [OK]:
+                _logger.error(
+                    "event db accesss fail. status: %s, results: %s"
+                    % (status, data))
+                raise Exception(data)
+
+            job_id = int(data["jobs"][0]["max"])
             return job_id
 
-    def query_event_lastest(self, filter_dict):
-        event_dict = {}
-        try:
-            result = self.query_data_detail_setup(self.tablename,
-                                                  None,
-                                                  filter_dict, None, None,
-                                                  1, True, True)
-        except dpclient.DbError:
-            return None
+        except Exception:
+            return 0
 
-        else:
-            key_list = []
-            for key in result.keys():
-                if "time" != key:
-                    key_list.append(key)
-            for i in range(len(result["time"])):
-                event_dict.update({result["time"][i][0]: {}})
-                target = event_dict[result["time"][i][0]]
-                for j in key_list:
-                    target.update({j: result[j][i]})
+    def query_event_lastest(self, filter_dict):
+        try:
+            url = "%s/%s/jobs?" % (
+                self.endpoint, platform.node())
+
+            if 'host_name' in filter_dict:
+                url = url + 'host=%s&' % (filter_dict['host_name'])
+            if 'policy' in filter_dict:
+                url = url + 'policy=%s&' % (filter_dict['policy'])
+            if 'event' in filter_dict:
+                url = url + 'event=%s&' % (filter_dict['event'])
+
+            url = url + 'limit=1'
+
+            params = {}
+
+            status, data, _ = self._send_cmd(
+                'GET', url, params, [OK], json_content=True)
+
+            if status not in [OK]:
+                _logger.error(
+                    "event db accesss fail. status: %s, results: %s"
+                    % (status, data))
+                raise Exception(data)
+
+            timestamp = int(time.mktime(datetime.strptime(
+                data["jobs"][0]["time"], "%Y-%m-%dT%H:%M:%S.%fZ").timetuple()))
+
+            event_dict = {timestamp: {}}
+            target = event_dict[timestamp]
+            for key, value in data["jobs"][0].iteritems():
+                if key != 'time':
+                    if isinstance(value, int):
+                        target.update({str(key): int(value)})
+                    elif isinstance(value, long):
+                        target.update({str(key): float(value)})
+                    else:
+                        target.update({str(key): str(value)})
             return event_dict
+
+        except Exception:
+            return None
 
     def query_event_by_interval(self, time_interval, filter_dict):
-        event_dict = {}
         try:
-            result = self.query_data_detail_setup(self.tablename,
-                                                  time_interval,
-                                                  filter_dict, None, None,
-                                                  1, True, True)
-        except dpclient.DbError:
-            return None
+            url = "%s/%s/jobs?" % (
+                self.endpoint, platform.node())
 
-        else:
-            key_list = []
-            for key in result.keys():
-                if "time" != key:
-                    key_list.append(key)
-            for i in range(len(result["time"])):
-                event_dict.update({result["time"][i][0]: {}})
-                target = event_dict[result["time"][i][0]]
-                for j in key_list:
-                    target.update({j: result[j][i]})
+            if 'host_name' in filter_dict:
+                url = url + 'host=%s&' % (filter_dict['host_name'])
+            if 'policy' in filter_dict:
+                url = url + 'policy=%s&' % (filter_dict['policy'])
+            if 'event' in filter_dict:
+                url = url + 'event=%s&' % (filter_dict['event'])
+            if time_interval:
+                url = url + \
+                    'tsfrom="%s"&tsto="%s"&' % (
+                        datetime.utcfromtimestamp(
+                            time_interval[0]).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                        datetime.utcfromtimestamp(
+                            time_interval[1]).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+
+            url = url + 'limit=1'
+
+            url = url.replace('"', '%22').replace(' ', '%20')
+
+            params = {}
+
+            status, data, _ = self._send_cmd(
+                'GET', url, params, [OK], json_content=True)
+
+            if status not in [OK]:
+                _logger.error(
+                    "event db accesss fail. status: %s, results: %s"
+                    % (status, data))
+                raise Exception(data)
+
+            timestamp = int(time.mktime(datetime.strptime(
+                data["jobs"][0]["time"], "%Y-%m-%dT%H:%M:%S.%fZ").timetuple()))
+
+            event_dict = {timestamp: {}}
+            target = event_dict[timestamp]
+            for key, value in data["jobs"][0].iteritems():
+                if key != 'time':
+                    if isinstance(value, int):
+                        target.update({str(key): int(value)})
+                    elif isinstance(value, long):
+                        target.update({str(key): float(value)})
+                    else:
+                        target.update({str(key): str(value)})
             return event_dict
 
-    def setup_cmd(self, tag_dict, field_dict):
+        except Exception:
+            return None
 
-        tag_str = ""
-        field_str = ""
-        for key, val in tag_dict.iteritems():
-            tag_str += ",{0}={1}".format(key, val)
+    def setup_cmd(self, field_dict):
+        try:
+            url = "%s/%s/jobs?" % (
+                self.endpoint, platform.node())
 
-        for key, val in field_dict.iteritems():
-            if isinstance(val, bool):
-                field_str += '{0}={1},'.format(key, val)
-            elif isinstance(val, int):
-                field_str += '{0}={1}i,'.format(key, val)
+            params = {"events": [field_dict]}
+
+            status, data, _ = self._send_cmd(
+                'PUT', url, params, [OK], json_content=True)
+
+            if status not in [OK]:
+                _logger.debug("Write Failed. The status code is %s" %
+                              (status))
+                raise Exception(data)
+
             else:
-                field_str += '{0}="{1}",'.format(key, val)
+                _logger.debug("Write Completed.")
 
-        params = '{0}{1} {2}'.format(
-            self.tablename, tag_str, field_str[:-1])
-
-        self._post_cmd(params)
+        except Exception:
+            raise
 
 
 if __name__ == '__main__':
-    pass
+    eventdb = EventDBTool()
+    eventdb.setup_cmd({
+        "action": "action.noop",
+        "action_result": "original schedule: [* */8 * * *], status: active new schedule: [* */2 * * *], status: active",
+        "disk_name": "DELL-2",
+        "event": "event.dp.predict.diskfailure.critical",
+        "host_name": "WIN-A4AQ4781FJH",
+        "job_id": 15,
+        "pda_server": "DESKTOP-6I3D1JB",
+        "policy": "policy.drprophet.schedule.diskfailure.critical",
+        "reason": "[WIN-A4AQ4781FJH][disk 1(Good), disk 0(Good), disk 3(Good), disk 2(Good), DELL-0(Good), DELL-1(Good), DELL-2(Good), disk 4(Good)] Event: policy.drprophet.schedule.diskfailure.critical  ended",
+        "severity": "Critical",
+        "status": "ended",
+        "vm_name": ""
+    })
+    print eventdb.query_job_id_lastest()
+    print eventdb.query_event_lastest({"policy": "policy.drprophet.schedule.diskfailure.critical",
+                                       "event": "event.dp.predict.diskfailure.critical",
+                                       "host_name": "WIN-A4AQ4781FJH"})
+    end_time = int(time.time())
+    start_time = end_time - 86400
+    print eventdb.query_event_by_interval([start_time, end_time], {"policy": "policy.drprophet.schedule.diskfailure.critical",
+                                                                   "event": "event.dp.predict.diskfailure.critical",
+                                                                   "host_name": "WIN-A4AQ4781FJH"})

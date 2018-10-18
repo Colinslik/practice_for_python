@@ -10,15 +10,20 @@ import json
 import requests
 import urllib3
 
-import config
-import logger
+try:
+    import config
+    import logger
+    ifttt = False
+except Exception:
+    ifttt = True
 
 
-# Get logger
-_logger = logger.get_logger()
+if not ifttt:
+    # Get logger
+    _logger = logger.get_logger()
 
-# Get configuration
-_conf = config.get_config()
+    # Get configuration
+    _conf = config.get_config()
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -37,25 +42,41 @@ class Neo4jApi(object):
     """
     DiskProphet connector V1 API
     """
+    if not ifttt:
+        def __init__(self, host="127.0.0.1"):
+            global _conf
+            _conf = config.get_config()
 
-    def __init__(self):
-        global _conf
-        _conf = config.get_config()
-
-        self.host = _conf.get('service.diskprophet', 'dp.neo4j.host', '')
-        if not self.host:
-            self.host = _conf.get('service.diskprophet', 'dp.host', '')
-        self.port = _conf.get('service.diskprophet', 'dp.neo4j.port', '')
-        self.user = _conf.get('service.diskprophet', 'dp.neo4j.user', '')
-        self.password = _conf.get('service.diskprophet', 'dp.neo4j.passwd', '')
-        if not self.host or not self.port \
-                or not self.user or not self.password:
-            msg = "DiskProphet read config error. " \
-                "dp.neo4j.host: {0}  dp.neo4j.port: {1}  "\
-                "dp.neo4j.user: {2}".format(
-                    self.host, self.port, self.user)
-            _logger.error("Invalid access to DiskProphet.")
-            raise ConfigError(msg)
+            self.host = _conf.get('service.diskprophet', 'dp.neo4j.host', '')
+            if not self.host:
+                self.host = _conf.get('service.diskprophet', 'dp.host', '')
+            self.port = _conf.get('service.diskprophet', 'dp.neo4j.port', '')
+            self.user = _conf.get('service.diskprophet', 'dp.neo4j.user', '')
+            self.password = _conf.get(
+                'service.diskprophet', 'dp.neo4j.passwd', '')
+            if not self.host or not self.port \
+                    or not self.user or not self.password:
+                msg = "DiskProphet read config error. " \
+                    "dp.neo4j.host: {0}  dp.neo4j.port: {1}  "\
+                    "dp.neo4j.user: {2}".format(
+                        self.host, self.port, self.user)
+                _logger.error(
+                    "No information of DiskProphet."
+                    " Please check if it is correct.")
+                raise ConfigError(msg)
+    else:
+        def __init__(self, host, port, user, password):
+            self.host = host
+            self.port = port
+            self.user = user
+            self.password = password
+            if not self.host or not self.port \
+                    or not self.user or not self.password:
+                msg = "DiskProphet read config error. " \
+                    "dp.neo4j.host: {0}  dp.neo4j.port: {1}  "\
+                    "dp.neo4j.user: {2}".format(
+                        self.host, self.port, self.user)
+                raise ConfigError(msg)
 
     def _detail_setup(self, label=None, _rels=None,
                       key=None, val=None, cond_dict=None, idx=None,
@@ -78,7 +99,7 @@ class Neo4jApi(object):
                 if isinstance(i, int) or isinstance(val, long):
                     self.key += "(n.{0} = {1}".format(key, i)
                 else:
-                    self.key += "(n.{0} = '{1}'".format(key, i)
+                    self.key += "(n.{0} =~ '{1}'".format(key, i)
                 if cond_dict:
                     for dict_key, dict_val in cond_dict.iteritems():
                         if "time" in dict_key:
@@ -90,7 +111,7 @@ class Neo4jApi(object):
                             self.key += " AND n.{0} {1} {2}".format(
                                 dict_key, operator, dict_val)
                         else:
-                            self.key += " AND n.{0} {1} '{2}'".format(
+                            self.key += " AND n.{0} {1}~ '{2}'".format(
                                 dict_key, operator, dict_val)
                 self.key += ") OR "
             self.key = self.key[:-4]
@@ -106,7 +127,7 @@ class Neo4jApi(object):
                         self.key = ' WHERE (n.{0} {1} {2})'.format(
                             dict_key, operator, dict_val)
                     else:
-                        self.key = " WHERE (n.{0} {1} '{2}')".format(
+                        self.key = " WHERE (n.{0} {1}~ '{2}')".format(
                             dict_key, operator, dict_val)
             else:
                 self.key = ""
@@ -158,15 +179,24 @@ class Neo4jApi(object):
             }]
         }
 
-        _logger.debug("Neo4jApi: URL (%s)"
-                      " Params (%s)" % (url, _params))
+        if not ifttt:
+            _logger.debug("Neo4jApi: URL (%s)"
+                          " Params (%s)" % (url, _params))
 
         try:
             result = requests.post(
                 url, data=json.dumps(_params), headers=headers)
         except requests.RequestException:
-            _logger.error("DB Request error.")
-            _logger.debug("Error Code: %s" % (result.status_code))
+            if not ifttt:
+                _logger.error(
+                    "Invalid access to DiskProphet."
+                    " Please check if it is correct.")
+                _logger.debug("Error Code: %s" % (result.status_code))
+            else:
+                print(
+                    "Invalid access to DiskProphet."
+                    " Please check if it is correct.")
+            return None
         except Exception:
             msg = "Neo4jApi Get no results ( {0}.{1} )" \
                 " Your Params is {2}".format(
@@ -177,8 +207,15 @@ class Neo4jApi(object):
             if result.status_code is 200:
                 return result
             else:
-                _logger.error("DB Request error.")
-                _logger.debug("Error Code: %s" % (result.status_code))
+                if not ifttt:
+                    _logger.error(
+                        "Invalid access to DiskProphet."
+                        " Please check if it is correct.")
+                    _logger.debug("Error Code: %s" % (result.status_code))
+                else:
+                    print(
+                        "Invalid access to DiskProphet."
+                        " Please check if it is correct.")
                 return None
 
 
@@ -187,33 +224,62 @@ class InfluxdbApi(object):
     DiskProphet connector V1 API
     """
 
-    def __init__(self):
-        global _conf
-        _conf = config.get_config()
+    if not ifttt:
+        def __init__(self, host="127.0.0.1", advanced_search=False):
+            global _conf
+            _conf = config.get_config()
 
-        self.host = _conf.get('service.diskprophet', 'dp.influxdb.host', '')
-        if not self.host:
-            self.host = _conf.get('service.diskprophet', 'dp.host', '')
-        self.port = _conf.get('service.diskprophet', 'dp.influxdb.port', '')
-        self.user = _conf.get('service.diskprophet', 'dp.influxdb.user', '')
-        self.password = _conf.get(
-            'service.diskprophet', 'dp.influxdb.passwd', '')
-        self.dbname = "telegraf"
-        if self.password:
-            self.ssl = "https"
-        else:
-            self.ssl = "http"
+            self.host = _conf.get('service.diskprophet',
+                                  'dp.influxdb.host', '')
+            if not self.host:
+                self.host = _conf.get('service.diskprophet', 'dp.host', '')
+            self.port = _conf.get('service.diskprophet',
+                                  'dp.influxdb.port', '')
+            self.user = _conf.get('service.diskprophet',
+                                  'dp.influxdb.user', '')
+            self.password = _conf.get(
+                'service.diskprophet', 'dp.influxdb.passwd', '')
+            self.dbname = "telegraf"
+            if self.password:
+                self.ssl = "https"
+            else:
+                self.ssl = "http"
 
-        self.set_display(None)
+            self.advanced_search = advanced_search
+            self.set_display(None)
 
-        if not self.host or not self.port \
-                or not self.user or not self.password:
-            msg = "DiskProphet read config error. " \
-                "dp.influxdb.host: {0}  dp.influxdb.port: {1}  "\
-                "dp.influxdb.user: {2}".format(
-                    self.host, self.port, self.user)
-            _logger.error("Invalid access to DiskProphet.")
-            raise ConfigError(msg)
+            if not self.host or not self.port \
+                    or not self.user or not self.password:
+                msg = "DiskProphet read config error. " \
+                    "dp.influxdb.host: {0}  dp.influxdb.port: {1}  "\
+                    "dp.influxdb.user: {2}".format(
+                        self.host, self.port, self.user)
+                _logger.error(
+                    "No information of DiskProphet."
+                    " Please check if it is correct.")
+                raise ConfigError(msg)
+    else:
+        def __init__(self, host, port, user, password, advanced_search=False):
+            self.host = host
+            self.port = port
+            self.user = user
+            self.password = password
+            self.dbname = "telegraf"
+            if self.password:
+                self.ssl = "https"
+            else:
+                self.ssl = "http"
+
+            self.advanced_search = advanced_search
+            self.set_display(None)
+
+            if not self.host or not self.port \
+                    or not self.user or not self.password:
+                msg = "DiskProphet read config error. " \
+                    "dp.influxdb.host: {0}  dp.influxdb.port: {1}  "\
+                    "dp.influxdb.user: {2}".format(
+                        self.host, self.port, self.user)
+                raise ConfigError(msg)
 
     def set_display(self, display_list):
         self.display_list = ""
@@ -235,24 +301,39 @@ class InfluxdbApi(object):
                        slimit_number=None, limit_number=None,
                        sort=False):
         # setup influxdb cli arguments
-
-        if entry_list_pkg and type(entry_list_pkg) is list:
-            self.entry_list = \
-                ' WHERE ("{0}"::tag = \'{1}\' or "{0}"::field = \'{1}\')'.format(
-                    entry_list_pkg[0], entry_list_pkg[1][0])
-            for i in entry_list_pkg[1][1:]:
-                self.entry_list += \
-                    ' OR ("{0}"::tag = \'{1}\' or "{0}"::field = \'{1}\')'.format(
-                        entry_list_pkg[0], i)
-        elif entry_list_pkg and type(entry_list_pkg) is dict:
-            self.entry_list = ' WHERE '
-            for key, val in entry_list_pkg.iteritems():
-                self.entry_list += \
-                    '("{0}"::tag = \'{1}\' or "{0}"::field = \'{1}\') AND '.format(
-                        key, val)
-            self.entry_list = self.entry_list[:-5]
+        if self.advanced_search:
+            if entry_list_pkg and type(entry_list_pkg) is list:
+                self.entry_list = \
+                    ' WHERE ("{0}"::tag = \'{1}\' or "{0}"::field = \'{1}\')'.format(
+                        entry_list_pkg[0], entry_list_pkg[1][0])
+                for i in entry_list_pkg[1][1:]:
+                    self.entry_list += \
+                        ' OR ("{0}"::tag = \'{1}\' or "{0}"::field = \'{1}\')'.format(
+                            entry_list_pkg[0], i)
+            elif entry_list_pkg and type(entry_list_pkg) is dict:
+                self.entry_list = ' WHERE '
+                for key, val in entry_list_pkg.iteritems():
+                    self.entry_list += \
+                        '("{0}"::tag = \'{1}\' or "{0}"::field = \'{1}\') AND '.format(
+                            key, val)
+                self.entry_list = self.entry_list[:-5]
+            else:
+                self.entry_list = ""
         else:
-            self.entry_list = ""
+            if entry_list_pkg and type(entry_list_pkg) is list:
+                self.entry_list = ' WHERE "{0}" = \'{1}\''.format(
+                    entry_list_pkg[0], entry_list_pkg[1][0])
+                for i in entry_list_pkg[1][1:]:
+                    self.entry_list += ' OR "{0}" = \'{1}\''.format(
+                        entry_list_pkg[0], i)
+            elif entry_list_pkg and type(entry_list_pkg) is dict:
+                self.entry_list = ' WHERE '
+                for key, val in entry_list_pkg.iteritems():
+                    self.entry_list += '"{0}" = \'{1}\' AND '.format(
+                        key, val)
+                self.entry_list = self.entry_list[:-5]
+            else:
+                self.entry_list = ""
 
         if time_interval and entry_list_pkg:
             self.time_interval = " AND time >= {0} AND time <= {1}".format(
@@ -312,11 +393,12 @@ class InfluxdbApi(object):
                 self.ssl, self.host, self.port, self.dbname, self.user,
                 self.password, self.timestamp, command)
 
-        _logger.debug("InfluxdbApi: URL (%s) Argurment:"
-                      " Timestamp (%s) Group by (%s)"
-                      " Sort (%s) limit (%s) Slimit (%s)"
-                      % (self.url, timestamp, group, sort,
-                         limit_number, slimit_number))
+        if not ifttt:
+            _logger.debug("InfluxdbApi: URL (%s) Argurment:"
+                          " Timestamp (%s) Group by (%s)"
+                          " Sort (%s) limit (%s) Slimit (%s)"
+                          % (self.url, timestamp, group, sort,
+                             limit_number, slimit_number))
 
         result = self._arrange_to_dict()
 
@@ -344,24 +426,19 @@ class InfluxdbApi(object):
                         try:
                             for j in range(len(decodedjson)):
                                 for k in range(len(decodedjson[j]["values"])):
-                                    temp.append(str(decodedjson[j]["values"][k][i])
-                                                .replace("u'", "")
-                                                .replace("',", "")
-                                                .replace("[", "")
-                                                .replace("]", "").split())
+                                    temp.append(
+                                        str(decodedjson[j]["values"][k][i]).split(' '))
                         # original entry is a string included Apostrophe, Comma,
                         # Semicolon and character encodeing, replacing them with
                         # split and replace method.
-                                pre_result[str(decodedjson[j]["columns"][i])
-                                           .replace("u'", "")
-                                           .replace("',", "")
-                                           .replace("[", "")
-                                           .replace("]", "")] = deepcopy(temp)
+                                pre_result[str(decodedjson[j]["columns"][i])] = deepcopy(
+                                    temp)
                         except Exception:
-                            _logger.debug(
-                                "Unsupported characters are included.")
-                            _logger.debug("%s" %
-                                          (decodedjson[j]["values"][k][i]))
+                            if not ifttt:
+                                _logger.debug(
+                                    "Unsupported characters are included.")
+                                _logger.debug("%s" %
+                                              (decodedjson[j]["values"][k][i]))
                         del temp[:]
 
                     while True:
@@ -399,16 +476,30 @@ class InfluxdbApi(object):
         try:
             result = requests.get(self.url, verify=False)
         except requests.RequestException as e:
-            _logger.error("DB Request error.")
-            _logger.debug("Error Code: %s Result: %s" %
-                          (result.status_code, e))
+            if not ifttt:
+                _logger.error(
+                    "Invalid access to DiskProphet."
+                    " Please check if it is correct.")
+                _logger.debug("Error Code: %s Result: %s" %
+                              (result.status_code, e))
+            else:
+                print(
+                    "Invalid access to DiskProphet."
+                    " Please check if it is correct.")
+            return None
         else:
             if result.status_code is 200:
                 return result
             else:
-                _logger.error("DB Request error.")
-                _logger.debug("Error Code: %s" % (result.status_code))
-
+                if not ifttt:
+                    _logger.error(
+                        "Invalid access to DiskProphet."
+                        " Please check if it is correct.")
+                    _logger.debug("Error Code: %s" % (result.status_code))
+                else:
+                    print(
+                        "Invalid access to DiskProphet."
+                        " Please check if it is correct.")
                 return None
 
     def _post_cmd(self, params):
@@ -418,24 +509,342 @@ class InfluxdbApi(object):
 
         _params = '{0}'.format(params)
 
-        _logger.debug("InfluxdbApi POST: URL (%s) Argurment:"
-                      " Body (%s)"
-                      % (url, _params))
+        if not ifttt:
+            _logger.debug("InfluxdbApi POST: URL (%s) Argurment:"
+                          " Body (%s)"
+                          % (url, _params))
         try:
             result = requests.request(
                 "POST", url, data=_params, verify=False)
 
         except requests.RequestException as e:
-            _logger.error("DB Request error.")
-            _logger.debug("Result: %s" % (e))
+            if not ifttt:
+                _logger.error(
+                    "Invalid access to DiskProphet."
+                    " Please check if it is correct.")
+                _logger.debug("Result: %s" % (e))
+            else:
+                print(
+                    "Invalid access to DiskProphet."
+                    " Please check if it is correct.")
         else:
             if result.status_code is 204:
                 print "Write Completed."
-                _logger.debug("Write Completed.")
+                if not ifttt:
+                    _logger.debug("Write Completed.")
             else:
                 print "Write Failed. The status code is ", result.status_code
-                _logger.debug("Write Failed. The status code is %d" %
-                              (result.status_code))
+                if not ifttt:
+                    _logger.debug("Write Failed. The status code is %d" %
+                                  (result.status_code))
+
+
+class Neo4jTool(Neo4jApi):
+    """
+    DiskProphet connector V1 API
+    """
+
+    if not ifttt:
+        def __init__(self, host="127.0.0.1"):
+            super(Neo4jTool, self).__init__(host)
+    else:
+        def __init__(self, host="127.0.0.1", port=7474, user="neo4j", password="na"):
+            super(Neo4jTool, self).__init__(host, port, user, password)
+
+    def query_nodes(self, label="VMVirtualMachine", key="domainId", val=[],
+                    cond_dict={}):
+        result = self._send_cmd(self._detail_setup(
+            label, None, key, val, cond_dict,
+            None, None, None, None))
+
+        try:
+            encoded = json.loads(result.text, encoding='utf-8')
+            if "id" in encoded["results"][0]["data"][0]["graph"]["nodes"][0]:
+                pass
+        except Exception:
+            msg = "Neo4jApi Get no results ( {0}.{1} )".format(
+                self.__class__.__name__,
+                self.query_nodes.__name__)
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
+            raise DbError(msg)
+        else:
+            encoded_list = []
+            for i in encoded["results"][0]["data"]:
+                encoded_list.append(i["graph"]["nodes"][0]["properties"])
+
+        return encoded_list
+
+    def query_by_label_rels(self, vms=[], label="VMVirtualMachine",
+                            rels=None, cond_dict={},
+                            tag="domainId", output_tag="domainId"):
+        if rels:
+            left_rel = ""
+            right_rel = ""
+            result_type = " n"
+            for idx, rel in enumerate(rels):
+                left_rel += "-[r{1}:{0}]->(t{1})".format(rel, idx)
+                right_rel += "<-[r{1}:{0}]-(t{1})".format(rel, idx)
+                result_type += ",r{0},t{0}".format(idx)
+            _rels = [left_rel, right_rel]
+        else:
+            _rels = ["-[r*]->(t)", "<-[r*]-(t)"]
+            result_type = " n,r,t"
+        params = ""
+        arranged = {}
+
+        for i in _rels:
+            params = self._detail_setup(
+                label, i, None, None, None,
+                self._query_id_by_key(label, tag, vms, cond_dict),
+                result_type, None, params)
+
+        result = self._send_cmd(params)
+
+        try:
+            encoded = json.loads(result.text, encoding='utf-8')
+            if tag in encoded["results"][0][
+                    "data"][0]["graph"]["nodes"][0]["properties"]:
+                pass
+        except Exception:
+            msg = "Neo4jApi Get no results ( {0}.{1} )".format(
+                self.__class__.__name__,
+                self.query_by_label_rels.__name__)
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
+            raise DbError(msg)
+        else:
+            labels_pool = {}
+            target = {}
+            key = ""
+            count = 0
+            for i in encoded["results"][0]["data"]:
+                for j in i["graph"]["nodes"]:
+                    labels_pool[str(j["labels"][0])] = str(
+                        j["properties"][output_tag])
+
+                key = labels_pool.get(label)
+                if key in arranged:
+                    pass
+                else:
+                    arranged[key] = {}
+                target = arranged.get(key)
+                count += 1
+
+                if "VMDatastore" in labels_pool:
+                    key = labels_pool.get("VMDatastore")
+                    if "Datastores" not in target:
+                        target["Datastores"] = {}
+                    if key in target["Datastores"]:
+                        pass
+                    else:
+                        target["Datastores"][key] = {"Disks": {}}
+
+                if "VMDisk" in labels_pool:
+                    if "VMDatastore" in labels_pool:
+                        key = labels_pool.get("VMDatastore")
+                    else:
+                        key = "None_#{0}".format(count)
+                    if "Datastores" not in target:
+                        target["Datastores"] = {}
+                    if key in target["Datastores"]:
+                        pass
+                    else:
+                        target["Datastores"][key] = {"Disks": {}}
+                    target["Datastores"][key]["Disks"][
+                        labels_pool.get("VMDisk")] = {"Groups": ""}
+
+                if "VMVSanDiskGroup" in labels_pool:
+                    if "VMDisk" in labels_pool:
+                        key_disks = labels_pool.get("VMDisk")
+                    else:
+                        key_disks = "None_#{0}".format(count)
+                    if "VMDatastore" in labels_pool:
+                        key = labels_pool.get("VMDatastore")
+                    else:
+                        key = "None_#{0}".format(count)
+                    if "Datastores" not in target:
+                        target["Datastores"] = {}
+                    if key not in target["Datastores"]:
+                        target["Datastores"][key] = {"Disks": {}}
+                    if key_disks not in target["Datastores"][key]["Disks"]:
+                        target["Datastores"][key]["Disks"][key_disks] = {
+                            "Groups": ""}
+                    target["Datastores"][key]["Disks"][key_disks]["Groups"] = \
+                        labels_pool.get("VMVSanDiskGroup")
+
+                if "VMVirtualMachine" in labels_pool:
+                    key = labels_pool.get("VMVirtualMachine")
+                    if "VMs" not in target:
+                        target["VMs"] = []
+                    if key not in target["VMs"]:
+                        target["VMs"].append(key)
+
+                if "VMClusterCenter" in labels_pool:
+                    if "Clusters" not in target:
+                        target["Clusters"] = {}
+                    target["Clusters"][labels_pool.get(
+                        "VMClusterCenter")] = {"Types": "Cluster"}
+
+                if "VMHost" in labels_pool:
+                    if "Clusters" not in target:
+                        target["Clusters"] = {}
+                    target["Clusters"][labels_pool.get(
+                        "VMHost")] = {"Types": "Host"}
+
+                labels_pool.clear()
+
+            return arranged
+
+    def _query_id_by_key(self, label, key, val,
+                         cond_dict={}):
+        params = self._detail_setup(
+            label, None, key, val, cond_dict,
+            None, None, None, None)
+        result = self._send_cmd(params)
+
+        try:
+            encoded = json.loads(result.text, encoding='utf-8')
+            if "id" in encoded["results"][0]["data"][0]["graph"]["nodes"][0]:
+                pass
+        except Exception:
+            msg = "Neo4jApi Get no results ( {0}.{1} )".format(
+                self.__class__.__name__,
+                self._query_id_by_key.__name__)
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
+            raise DbError(msg)
+        else:
+            encoded_list = []
+            for i in encoded["results"][0]["data"]:
+                encoded_list.append(str(i["graph"]["nodes"][0]["id"]))
+
+            return encoded_list
+
+
+class InfluxdbTool(InfluxdbApi):
+    """
+    DiskProphet connector V1 API
+    """
+
+    if not ifttt:
+        def __init__(self, host="127.0.0.1"):
+            super(InfluxdbTool, self).__init__(host)
+    else:
+        def __init__(self, host="127.0.0.1", port="8086", user="dpInfluxdb", password="DpPassw0rd"):
+            super(InfluxdbTool, self).__init__(host, port, user, password)
+
+    def query_vm_host(self, composite_cmd="virtualmachine",
+                      entry_list=None, group=None):
+        if entry_list:
+            entry_list_pkg = ["domain_id", entry_list]
+        else:
+            entry_list_pkg = entry_list
+        return self.query_data_detail_setup(composite_cmd,
+                                            None,
+                                            entry_list_pkg, group, None,
+                                            1, True, True)
+
+    def query_disk_info(self, composite_cmd="sai_disk",
+                        entry_list=None, group=None):
+        if entry_list:
+            entry_list_pkg = ["disk_domain_id", entry_list]
+        else:
+            entry_list_pkg = entry_list
+        return self._postprocess_to_filter_id(
+            self.query_data_detail_setup(composite_cmd,
+                                         None,
+                                         entry_list_pkg, group, None,
+                                         1, True, True))
+
+    def query_ip_by_host(self, time_interval, entry_list=None):
+        ip_dict = {}
+        filter_list = ["domain_id", entry_list]
+        try:
+            result = self.query_data_detail_setup("sai_host",
+                                                  time_interval,
+                                                  filter_list, None, None,
+                                                  None, True, True)
+        except DbError:
+            msg = "InfluxdbApi Get no results ( {0}.{1} )" \
+                " Your URL is {2}".format(
+                    self.__class__.__name__,
+                    self.query_data_detail_setup.__name__, self.url)
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
+            raise DbError(msg)
+
+        else:
+            key_list = []
+            for key in result.keys():
+                if "domain_id" != key:
+                    key_list.append(key)
+            for i in range(len(result["domain_id"])):
+                if result["domain_id"][i][0] not in ip_dict:
+                    ip_dict.update({result["domain_id"][i][0]: {}})
+                target = ip_dict[result["domain_id"][i][0]]
+                for j in key_list:
+                    target.update({j: result[j][i]})
+            return ip_dict
+
+    def query_pred_interval_by_disk(self, time_interval, entry_list=None):
+        if entry_list:
+            entry_list_pkg = ["disk_domain_id", entry_list]
+        else:
+            entry_list_pkg = entry_list
+        return self._postprocess_to_filter_id(
+            self.query_data_detail_setup('sai_disk_prediction',
+                                         time_interval,
+                                         entry_list_pkg, None, None,
+                                         None, True, True))
+
+    def _postprocess_to_filter_id(self, pre_result):
+        pos_result = {}
+
+        # except for instruction error
+        if pre_result is None:
+            msg = "InfluxdbApi Get no results ( {0}.{1} )" \
+                " Your URL is {2}".format(
+                    self.__class__.__name__,
+                    self.query_data_detail_setup.__name__, self.url)
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
+            raise DbError(msg)
+
+        for idx, val in enumerate(pre_result.get('disk_domain_id')):
+            if val[0] not in pos_result:
+                pos_result[val[0]] = {}
+
+            if pre_result.get(
+                    'host_domain_id')[idx][0] not in pos_result[val[0]]:
+                pos_result[val[0]][
+                    pre_result.get('host_domain_id')[idx][0]] = {}
+
+            target_host = pos_result[val[0]][
+                pre_result.get('host_domain_id')[idx][0]]
+
+            if pre_result.get('time')[idx][0] not in target_host:
+                target_host[pre_result.get('time')[idx][0]] = {}
+
+            target = target_host[pre_result.get('time')[idx][0]]
+
+            keyslist = [x for x in pre_result.keys() if x not in [
+                'disk_domain_id', 'host_domain_id', 'time']]
+
+            for key in keyslist:
+                target.update({key: [' '.join(pre_result.get(key)[idx])]})
+
+        return pos_result
 
 
 if __name__ == '__main__':

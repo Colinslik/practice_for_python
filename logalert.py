@@ -54,6 +54,11 @@ class LogAlert(object):
             return _action
 
     def dump_log(self, log_list):
+        eventdb_conn = EventDb()
+        for log_data in log_list:
+            eventdb_conn.push_queue(log_data[4])
+            eventdb_conn.db_streaming()
+            log_data[4]["status"] = log_data[4]["status_failed"]
         try:
             log_filter = []
             for log_data in log_list:
@@ -84,7 +89,7 @@ class LogAlert(object):
                     log = self.action_parser(message, expr_dict)
                     if log and log not in log_filter:
                         log_filter.append(log)
-                log_data[4]["status"] = log_data[4]["status_change"]
+                log_data[4]["status"] = log_data[4]["status_succeeded"]
             for i in log_filter:
                 _logger.info("[LogAlert] %s" % (i))
 
@@ -100,7 +105,11 @@ class LogAlert(object):
         return [self.current_data[2]["display"]]
 
     def get_host(self):
-        return [self.current_data[1].keys()[0]]
+        host_vm_name = "{0} ({1})".format(
+            self.current_data[1].keys()[0], self.current_data[1].values()[0]["vm_name"]) \
+            if self.current_data[1].values()[0]["vm_name"] \
+            else "{0}".format(self.current_data[1].keys()[0])
+        return [host_vm_name]
 
     def get_disks(self):
         hostname = self.current_data[1].keys()[0]

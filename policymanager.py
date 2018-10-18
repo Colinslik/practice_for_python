@@ -42,6 +42,7 @@ class PolicyManager(object):
                     else:
                         policy_dict[i].update({key: val})
 
+        _logger.debug("policy list: %s" % (policy_dict))
         for key, val in policy_dict.iteritems():
             if val["enabled"] and val["type"] == "every-time":
                 suppression = val["suppression"]
@@ -72,13 +73,19 @@ class PolicyManager(object):
 
     def policy_trigger(self):
         action_list = []
-        eventdb_conn = eventmanager.EventDb()
         self.regist_policies()
         for policy in self.policy_list:
             for event in self.eventqueue:
                 if policy.get_event_id() == event[0].get_event_id() and\
                         self.get_trigger(policy, event[0]):
                     target_host = event[1].keys()[0]
+                    _logger.debug("action name: %s   policy event id: %s   event name: %s"
+                                  "   policy conditional: %s   event status: %s" % (
+                                      policy.get_actions(),
+                                      policy.get_event_id(),
+                                      event[0].get_event_id(),
+                                      policy.get_conditional(),
+                                      event[0].get_triggered()))
                     if self.check_event_db(
                             policy.get_event_id(),
                             target_host,
@@ -86,6 +93,10 @@ class PolicyManager(object):
                             policy.get_status_trigger(),
                             policy.get_policy_id()):
                         self.current_job_id = self.job_id
+                        host_vm_name = "{0} ({1})".format(
+                            target_host, event[2]["vm_name"]) \
+                            if event[2]["vm_name"] \
+                            else "{0}".format(target_host)
                         disk_name = ""
                         disk_status = ""
                         actions = ""
@@ -103,64 +114,68 @@ class PolicyManager(object):
                         if not disk_info_list:
                             disk_info_list = disk_name[:-2]
                         reason = "[{0}][{1}] Event: {2}  {3}".format(
-                            target_host,
+                            host_vm_name,
                             disk_status[:-2],
                             policy.get_policy_id(),
                             self.get_current_event_status()[:-1])
                         _logger.info("[%s][%s] Event: %s  %s" % (
-                            target_host, disk_info_list.replace("\\n", ", "),
+                            host_vm_name, disk_info_list.replace("\\n", ", "),
                             policy.get_policy_id(),
                             self.get_current_event_status()[:-1]))
                         for action in policy.get_actions():
                             actions += "{0}, ".format(action)
 
                             action_list.append(
-                                [action,
-                                 {target_host:
-                                  event[2]["host_ip"]},
-                                 {"display": event[0].get_display(
-                                 )},
-                                 event[1], {
-                                     "job_id": self.get_job_id(),
-                                     "pda_server": self.get_pdahost(),
-                                     "policy": policy.get_policy_id(),
-                                     "eventname": policy.get_event_id(),
-                                     "hostname": target_host,
-                                     "diskname": disk_info_list,
-                                     "severity": event[0].get_severity(),
-                                     "status": '{0}failed'.format(
-                                         self.get_current_event_status()),
-                                     "action": action,
-                                     "action_result": "",
-                                     "reason": reason,
-                                     "status_change": self.get_event_status_change()}])
-
-                            eventdb_conn.push_queue({
-                                "job_id": self.get_job_id(),
-                                "pda_server": self.get_pdahost(),
-                                "policy": policy.get_policy_id(),
-                                "eventname": policy.get_event_id(),
-                                "hostname": target_host,
-                                "diskname": disk_info_list,
-                                "severity": event[0].get_severity(),
-                                "status": '{0}processing'.format(
-                                    self.get_current_event_status()),
-                                "action": action,
-                                "action_result": "",
-                                "reason": reason})
+                                {self.get_priority():
+                                 [action,
+                                  {target_host:
+                                   event[2]},
+                                  {
+                                      "display": event[0].get_display(),
+                                      "policy_name": policy.get_policy_id(),
+                                      "policy_status":
+                                          self.get_current_event_status()[:-1]
+                                          if self.get_current_event_status()
+                                          else "triggered"
+                                  },
+                                    event[1], {
+                                      "job_id": self.get_job_id(),
+                                      "pda_server": self.get_pdahost(),
+                                      "policy": policy.get_policy_id(),
+                                      "eventname": policy.get_event_id(),
+                                      "hostname": target_host,
+                                      "vm_name": "" if not event[2]["vm_name"]
+                                      else event[2]["vm_name"],
+                                      "diskname": disk_info_list,
+                                      "severity": event[0].get_severity(),
+                                      "status": '{0}processing'.format(
+                                          self.get_current_event_status()),
+                                      "action": action,
+                                      "action_result":
+                                      self.get_last_action_resule(),
+                                      "reason": reason,
+                                      "status_succeeded":
+                                      self.get_event_status_change(),
+                                      "status_failed": '{0}failed'.format(
+                                          self.get_current_event_status())}]})
 
                         _logger.debug("[%s][%s][%s] trigger time: %s"
-                                      % (target_host,
+                                      % (host_vm_name,
                                          disk_status[:-2], actions[:-2],
                                          int(time.time() * 1000000000)))
 
-        eventdb_conn.db_streaming()
         return action_list
 
     def get_trigger(self, policy, event):
         replaced = {"event": event.get_triggered()}
         check_conditional = policy.get_conditional().format(**replaced)
         return eval(check_conditional)
+
+    def get_priority(self):
+        return self.priority
+
+    def get_last_action_resule(self):
+        return self.action_result
 
     def get_current_event_status(self):
         return self.current_event_status
@@ -173,9 +188,11 @@ class PolicyManager(object):
 
     def check_event_db(self, eventname, hostname,
                        suppression, status_trigger, policy):
+        self.priority = 1
         self.current_event_status = ''
         self.event_status_change = 'completed'
         self.last_diskname = ''
+        self.action_result = ''
         self.job_id = self.get_current_job_id() + 1
         filter_dict = {"pda_server": self.get_pdahost()}
         if status_trigger:
@@ -192,46 +209,81 @@ class PolicyManager(object):
                         ' == "{0}" and '.format(val1)
                 _status_trigger = _status_trigger[:-5] + ') or '
             if result:
-                for val in result.values():
-                    if "processing" in val["status"][0]:
-                        return False
-                    elif "started_failed" == val["status"][0]:
+                for key, val in result.iteritems():
+                    if "processing" in val["status"]:
+                        now = int(time.time())
+                        if now - key < 43200:
+                            return False
+                        else:
+                            replaced = {"status": '"ended"',
+                                        "failed_status": '""'}
+                            self.current_event_status = 'started_'
+                            self.event_status_change = 'started'
+                            self.priority = 2
+                    elif "started_failed" == val["status"]:
                         self.current_event_status = 'started_'
                         self.event_status_change = 'started'
+                        # replaced = {"status": '"ended"',
+                        #            "failed_status": '"started_failed"'}
                         replaced = {"status": '"ended"',
-                                    "failed_status": '"started_failed"'}
-                    elif "started" == val["status"][0]:
+                                    "failed_status": '""'}
+                        if "job_id" in val:
+                            self.job_id = val["job_id"]
+                        self.priority = 2
+                    elif "started" == val["status"]:
                         self.current_event_status = 'ended_'
                         self.event_status_change = 'ended'
                         replaced = {"status": '"started"',
                                     "failed_status": '""'}
-                        self.last_diskname = ' '.join(val["disk_name"])
+                        self.last_diskname = val["disk_name"]
+                        self.action_result = val["action_result"] \
+                            if "action_result" in val else ''
                         if "job_id" in val:
-                            self.job_id = int(val["job_id"][0])
-                    elif "ended_failed" == val["status"][0]:
+                            self.job_id = val["job_id"]
+                        self.priority = 3
+                    elif "ended_failed" == val["status"]:
+                        # end_failed retry
                         if '"started"' in _status_trigger:
                             self.current_event_status = 'ended_'
                             self.event_status_change = 'ended'
-                            replaced = {"status": '"started"',
-                                        "failed_status": '"ended_failed"'}
-                            self.last_diskname = ' '.join(val["disk_name"])
+                            # replaced = {"status": '"started"',
+                            #            "failed_status": '"ended_failed"'}
+                            replaced = {"status": '"ended_failed"',
+                                        "failed_status": '""'}
+                            self.last_diskname = val["disk_name"]
+                            self.action_result = val["action_result"] \
+                                if "action_result" in val else ''
                             if "job_id" in val:
-                                self.job_id = int(val["job_id"][0])
+                                self.job_id = val["job_id"]
+                            self.priority = 3
+                        # retire this action and reset status to ended to run a
+                        # new round.
                         else:
                             self.current_event_status = 'started_'
                             self.event_status_change = 'started'
+                            # replaced = {"status": '"ended"',
+                            #            "failed_status": '"ended_failed"'}
                             replaced = {"status": '"ended"',
-                                        "failed_status": '"ended_failed"'}
-                    elif "ended" == val["status"][0]:
+                                        "failed_status": '""'}
+                            self.priority = 2
+                    elif "ended" == val["status"]:
                         self.current_event_status = 'started_'
                         self.event_status_change = 'started'
                         replaced = {"status": '"ended"',
                                     "failed_status": '""'}
+                        self.priority = 2
+                    else:
+                        replaced = {"status": '"ended"',
+                                    "failed_status": '""'}
+                        self.current_event_status = 'started_'
+                        self.event_status_change = 'started'
+                        self.priority = 2
             else:
                 replaced = {"status": '"ended"',
                             "failed_status": '""'}
                 self.current_event_status = 'started_'
                 self.event_status_change = 'started'
+                self.priority = 2
             try:
                 check_conditional = _status_trigger[:-4].format(**replaced)
             except Exception:
@@ -245,23 +297,21 @@ class PolicyManager(object):
             result = self.query_eventdb(filter_dict, suppression)
             if result:
                 for val in result.values():
-                    if "failed" != val["status"][0]:
+                    if "job_id" in val:
+                        self.job_id = val["job_id"]
+                    if "failed" != val["status"]:
                         return False
         return True
 
     def query_eventdb(self, filter_dict, suppression):
         eventdb_conn = eventmanager.EventDBTool()
         if suppression != 0:
-            end_time = int(time.time() * 1000000000)
-            start_time = end_time - (suppression * 1000000000)
+            end_time = int(time.time())
+            start_time = end_time - suppression
             result = eventdb_conn.query_event_by_interval(
                 [start_time, end_time], filter_dict)
         else:
             result = eventdb_conn.query_event_lastest(filter_dict)
-
-        if result:
-            for val in result.values():
-                val["event"] = ' '.join(val["event"])
         return result
 
     def get_pdahost(self):
@@ -271,10 +321,8 @@ class PolicyManager(object):
 
     def get_current_job_id(self):
         if not hasattr(self, 'current_job_id') or not self.current_job_id:
-            filter_dict = {"pda_server": self.get_pdahost()}
             eventdb_conn = eventmanager.EventDBTool()
-            self.current_job_id = eventdb_conn.query_job_id_lastest(
-                filter_dict)
+            self.current_job_id = eventdb_conn.query_job_id_lastest()
         return self.current_job_id
 
     def get_job_id(self):

@@ -8,19 +8,29 @@ import json
 import time
 
 import dpclient
-from eventmanager import Event as Event_obj
-from eventmanager import Event_Manager
-import logger
+try:
+    import logger
+    ifttt = False
+except Exception:
+    ifttt = True
 
+if not ifttt:
+    from eventmanager import Event as Event_obj
+    from eventmanager import Event_Manager
 
-# Get configuration and logger
-_logger = logger.get_logger()
+    # Get configuration and logger
+    _logger = logger.get_logger()
+else:
+    class Event_Manager(object):
+        def __init__(self):
+            pass
 
 
 class DiskEvent(Event_Manager):
 
-    def __init__(self, host_list):
+    def __init__(self, host_list, host="127.0.0.1"):
         super(DiskEvent, self).__init__()
+        self.host = host
         if "*" in host_list:
             self._host_list = []
         else:
@@ -35,6 +45,14 @@ class DiskEvent(Event_Manager):
 
     def get_hostlist(self):
         return self._host_list
+
+    def get_vm_dict(self):
+        vm_name_dict = {}
+        for hostname, info in self._ip_dict.iteritems():
+            if info["vm_name"]:
+                vm_name_dict.update(
+                    {str(hostname.lower()): str(info["vm_name"].lower())})
+        return vm_name_dict
 
     def merge_dict(self, dict1, dict2):
         if not dict1:
@@ -79,7 +97,7 @@ class DiskEvent(Event_Manager):
         vm_datastore_list = []
         guestdomainid_datastore = {}
 
-        relation_conn = Neo4jTool()
+        relation_conn = Neo4jTool(self.host)
         vm_datastore = relation_conn.query_by_label_rels(
             vm_hosts,
             "VMHost", ["VmHostHasVmDatastore"],
@@ -94,6 +112,17 @@ class DiskEvent(Event_Manager):
                 else:
                     if host not in self._datastore_hosts[datastore]:
                         self._datastore_hosts[datastore].append(host)
+
+        # update vsan info
+        vm_datastore_info = relation_conn.query_nodes(
+            "VMDatastore", "domainId", vm_datastore_list, cond_dict)
+
+        for node_info in vm_datastore_info:
+            if int(node_info["isVsan"]):
+                self._datastore_hosts.update(
+                    {node_info["domainId"]: [str(node_info["domainId"])]})
+                self._domainid_hosts.update(
+                    {node_info["domainId"]: node_info["name"]})
 
         vm_domainid = relation_conn.query_by_label_rels(
             vm_datastore_list,
@@ -113,7 +142,7 @@ class DiskEvent(Event_Manager):
                         guestdomainid_datastore[vm].append(
                             host["Datastores"].keys()[0])
 
-        prediction_conn = InfluxdbTool()
+        prediction_conn = InfluxdbTool(self.host)
         prediction_conn.set_display(["guest_hostname", "guest_ips",
                                      "name", "domain_id"])
         vmlist_result = prediction_conn.query_vm_host(
@@ -150,21 +179,21 @@ class DiskEvent(Event_Manager):
 
         try:
             vsan_capacity = relation_conn.query_by_label_rels(
-                vm_hosts,
-                "VMHost", ["VmHostHasVmDiskGroup",
-                           "VSanDiskGroupHasCapacityVmDisk"],
+                vm_datastore_list,
+                "VMDatastore", ["VsanDatastoreContainsVmDiskGroup",
+                                "VSanDiskGroupHasCapacityVmDisk"],
                 cond_dict,
-                "name", "domainId")
+                "domainId", "domainId")
         except Exception:
             vsan_capacity = {}
 
         try:
             vsan_cache = relation_conn.query_by_label_rels(
-                vm_hosts,
-                "VMHost", ["VmHostHasVmDiskGroup",
-                           "VSanDiskGroupHasCacheVmDisk"],
+                vm_datastore_list,
+                "VMDatastore", ["VsanDatastoreContainsVmDiskGroup",
+                                "VSanDiskGroupHasCacheVmDisk"],
                 cond_dict,
-                "name", "domainId")
+                "domainId", "domainId")
         except Exception:
             vsan_cache = {}
 
@@ -184,7 +213,7 @@ class DiskEvent(Event_Manager):
         windows_disks = {}
         vm_disks = {}
 
-        relation_conn = Neo4jTool()
+        relation_conn = Neo4jTool(self.host)
         host_dict = relation_conn.query_nodes(
             "VMHost", "name", self._host_list, cond_dict)
 
@@ -192,7 +221,7 @@ class DiskEvent(Event_Manager):
             if not self._host_list or data["name"] in self._host_list:
                 self._domainid_hosts.update({data["domainId"]: data["name"]})
 
-        self.query_iplist()
+        self._ip_dict = self.query_iplist()
 
         for host in self._domainid_hosts.values():
             hostname = str(host)
@@ -213,7 +242,7 @@ class DiskEvent(Event_Manager):
                     self._host_list.remove(hostname)
                 self._ip_dict.pop(hostname)
 
-        relation_conn = Neo4jTool()
+        relation_conn = Neo4jTool(self.host)
 
         if windows_hosts:
             windows_disks.update(relation_conn.query_by_label_rels(
@@ -223,36 +252,43 @@ class DiskEvent(Event_Manager):
                 "name", "domainId"))
             disk_relationship.update(windows_disks)
 
-        if vm_hosts:
-            vm_disks = self.query_vm_relationship(vm_hosts, cond_dict)
-            disk_relationship.update(vm_disks)
+    #        if vm_hosts:
+    #            vm_disks = self.query_vm_relationship(vm_hosts, cond_dict)
+    #            disk_relationship.update(vm_disks)
 
         return disk_relationship
 
-    def query_iplist(self):
-        for hostname in self._domainid_hosts.values():
-            self._ip_dict.update(
+    def query_iplist(self, domainid_hosts=None):
+        ip_dict = {}
+
+        if not domainid_hosts:
+            domainid_hosts = self._domainid_hosts
+
+        for hostname in domainid_hosts.values():
+            ip_dict.update(
                 {hostname: {"host_ip": None, "os_type": None, "vm_name": None}})
         end_time = int(time.time() * 1000000000)
         start_time = end_time - (3600 * 12 * 1000000000)
-        prediction_conn = InfluxdbTool()
+        prediction_conn = InfluxdbTool(self.host)
         prediction_conn.set_display(["domain_id", "host_ip", "os_type"])
         result = prediction_conn.query_ip_by_host(
-            [start_time, end_time], self._domainid_hosts.keys())
+            [start_time, end_time], domainid_hosts.keys())
 
         result_dict = {}
         for key, val in result.iteritems():
-            result_dict[self._domainid_hosts[key]] = result[key]
+            result_dict[domainid_hosts[key]] = result[key]
 
-        for key, val in self._ip_dict.iteritems():
+        for key, val in ip_dict.iteritems():
             if key in result_dict:
                 val["host_ip"] = result_dict[key]["host_ip"][0].split(",") \
                     if result_dict[key]["host_ip"][0] \
                     else result_dict[key]["host_ip"][0]
                 val["os_type"] = result_dict[key]["os_type"][0]
 
+        return ip_dict
+
     def query_prediction(self, disk_watchdog):
-        prediction_conn = InfluxdbTool()
+        prediction_conn = InfluxdbTool(self.host)
         end_time = int(time.time() * 1000000000)
         start_time = end_time - (3600 * 12 * 1000000000)
         self._prediction_result = prediction_conn.query_pred_interval_by_disk([
@@ -289,7 +325,7 @@ class DiskEvent(Event_Manager):
             "8": "SAS",
             "9": "SATA",
         }
-        prediction_conn = InfluxdbTool()
+        prediction_conn = InfluxdbTool(self.host)
         prediction_conn.set_display(["*", "disk_domain_id"])
         diskinfo_result = prediction_conn.query_disk_info(
             "sai_disk", disk_watchdog, ["disk_domain_id"])
@@ -336,7 +372,11 @@ class DiskEvent(Event_Manager):
             msg = "Neo4JApi Get wrong data ( {0}.{1} )".format(
                 self.__class__.__name__,
                 self.get_disklist.__name__)
-            _logger.error("An error occurred when analysing DiskProphet data.")
+            if not ifttt:
+                _logger.error(
+                    "An error occurred when analysing DiskProphet data.")
+            else:
+                print "An error occurred when analysing DiskProphet data."
             raise dpclient.DbError(msg)
 
         self.query_prediction(disk_watchdog)
@@ -344,101 +384,150 @@ class DiskEvent(Event_Manager):
 
         for key1, val1 in disk_list.iteritems():
             if key1 in self._prediction_result:
-                for key2, val2 in self._prediction_result[key1].iteritems():
-                    if key2 in self._domainid_hosts:
-                        if self._domainid_hosts[key2] not in self._host_info:
+                for val2 in self._prediction_result[key1].values():
+                    if val1[0] in self._domainid_hosts:
+                        if self._domainid_hosts[val1[0]] not in self._host_info:
                             self._host_info.update(
-                                {self._domainid_hosts[key2]: {}})
-                        target = self._host_info[self._domainid_hosts[key2]]
+                                {self._domainid_hosts[val1[0]]: {}})
+                        target = self._host_info[self._domainid_hosts[val1[0]]]
                         for key3, val3 in val2.iteritems():
-                            if self._domainid_hosts[key2] not in self._host_status:
+                            if self._domainid_hosts[val1[0]] not in self._host_status:
                                 self._host_status.update(
-                                    {self._domainid_hosts[key2]: val3["near_failure"][0]})
+                                    {self._domainid_hosts[val1[0]]: val3["near_failure"][0]})
                             else:
                                 if "Bad" == val3["near_failure"][0] or\
-                                        ("Warning" == val3["near_failure"][0] and "Bad" != self._host_status[self._domainid_hosts[key2]]) or\
-                                        ("Good" == val3["near_failure"][0] and "Bad" != self._host_status[self._domainid_hosts[key2]] and
-                                         "Warning" != self._host_status[self._domainid_hosts[key2]]):
-                                    if val3["near_failure"][0] != self._host_status[self._domainid_hosts[key2]]:
+                                        ("Warning" == val3["near_failure"][0] and "Bad" != self._host_status[self._domainid_hosts[val1[0]]]) or\
+                                        ("Good" == val3["near_failure"][0] and "Bad" != self._host_status[self._domainid_hosts[val1[0]]] and
+                                         "Warning" != self._host_status[self._domainid_hosts[val1[0]]]):
+                                    if val3["near_failure"][0] != self._host_status[self._domainid_hosts[val1[0]]]:
                                         self._host_status.update(
-                                            {self._domainid_hosts[key2]: val3["near_failure"][0]})
+                                            {self._domainid_hosts[val1[0]]: val3["near_failure"][0]})
                                         target.clear()
-                            if val3["near_failure"][0] == self._host_status[self._domainid_hosts[key2]]:
+                            if val3["near_failure"][0] == self._host_status[self._domainid_hosts[val1[0]]]:
                                 if val3["disk_name"][0] not in target:
                                     target.update({val3["disk_name"][0]: {}})
-                                target[val3["disk_name"][0]].update(
-                                    {"near_failure": val3["near_failure"][0],
-                                     "disk_name": diskinfo[key1]})
+                                if not ifttt:
+                                    target[val3["disk_name"][0]].update(
+                                        {"near_failure": val3["near_failure"][0],
+                                         "disk_name": diskinfo[key1]})
+                                else:
+                                    target[val3["disk_name"][0]].update(
+                                        {"near_failure": val3["near_failure"][0],
+                                         "disk_name": diskinfo[key1],
+                                         "time": key3})
 
-    def event_trigger(self):
-        event_queue = []
-        self.regist_events()
-        self.get_disklist()
-        for event in self.event_list:
-            for self.target_host in self._ip_dict.keys():
-                self.target_event = event
-                variable = {}
-                for idx in event.variable_extraction():
-                    variable.update(
-                        {idx: eval("self.get_{0}()".format(idx))})
-                if None in variable.values():
-                    continue
-                if eval(event.condition_parser(variable)):
-                    event.set_triggered(True)
+    if not ifttt:
+        def event_trigger(self):
+            event_queue = []
+            self.regist_events()
+            self.get_disklist()
+            for event in self.event_list:
+                for self.target_host, self.target_info \
+                        in self._ip_dict.iteritems():
+                    self.target_event = event
+                    variable = {}
+                    for idx in event.variable_extraction():
+                        variable.update(
+                            {idx: eval("self.get_{0}()".format(idx))})
+                    if None in variable.values():
+                        continue
+                    if eval(event.condition_parser(variable).lower()):
+                        event.set_triggered(True)
+                    else:
+                        event.set_triggered(False)
+                    event_queue.append(
+                        [Event_obj(
+                            event.get_event_id(),
+                            event.get_display(),
+                            event.get_severity(),
+                            event.get_conditional(),
+                            event.get_triggered()),
+                         {self.target_host:
+                          self._host_info[self.target_host] if self.target_host
+                          in self._host_info else
+                          self.get_vm_host()},
+                         self._ip_dict[self.target_host]])
+            return event_queue
+    else:
+        def event_trigger(self):
+            host_info_dict = {}
+            target_status = {"": []}
+            self.get_disklist()
+
+            for hostname, hoststatus in self._host_status.iteritems():
+                if hoststatus != target_status.keys()[0]:
+                    if "Bad" == hoststatus or\
+                        ("Warning" == hoststatus and "Bad" != target_status.keys()[0]) or\
+                        ("Good" == hoststatus and "Bad" != target_status.keys()[0] and
+                         "Warning" != target_status.keys()[0]):
+                        target_status = {hoststatus: [hostname]}
                 else:
-                    event.set_triggered(False)
-                event_queue.append(
-                    [Event_obj(
-                        event.get_event_id(),
-                        event.get_display(),
-                        event.get_severity(),
-                        event.get_conditional(),
-                        event.get_triggered()),
-                     {self.target_host:
-                      self._host_info[self.target_host] if self.target_host in self._host_info else
-                      self.get_vm_host()},
-                     self._ip_dict[self.target_host]])
-        return event_queue
+                    target_status[hoststatus].append(hostname)
 
-    def get_near_failure(self):
-        try:
-            if self.target_host in self._host_status:
-                return self._host_status[self.target_host]
+            for hostname in target_status.values()[0]:
+                for diskname, diskinfo in self._host_info[hostname].iteritems():
+                    if diskinfo["near_failure"] == target_status.keys()[0]:
+                        if hostname not in host_info_dict:
+                            host_info_dict[hostname] = {}
+                        host_info_dict[hostname].update(
+                            {diskname: {"near_failure": diskinfo["near_failure"],
+                                        "time": diskinfo["time"]}})
+
+            return host_info_dict
+
+    if not ifttt:
+        def get_near_failure(self):
+            try:
+                if self.target_host in self._host_status:
+                    return self._host_status[self.target_host]
+                else:
+                    self._nearfailure = None
+                    for datastore in self._guesthosts_datastore[
+                            self.target_host]:
+                        for host in self._datastore_hosts[datastore]:
+                            if self._host_status[self._domainid_hosts[host]]:
+                                status = self._host_status[self._domainid_hosts[host]]
+                                if "Bad" == status or\
+                                        ("Warning" == status and "Bad" != self._nearfailure) or\
+                                        ("Good" == status and "Bad" != self._nearfailure and
+                                         "Warning" != self._nearfailure):
+                                    self._nearfailure = status
+                            if "Bad" == self._nearfailure:
+                                return self._nearfailure
+                    return self._nearfailure
+            except Exception:
+                return None
+
+        def get_host(self):
+            if self.target_host.lower() in \
+                    self.target_event.get_conditional().lower():
+                return self.target_host
+            elif "{vm_name}" in self.target_event.get_conditional():
+                return ""
             else:
-                self._nearfailure = None
-                for datastore in self._guesthosts_datastore[
-                        self.target_host]:
-                    for host in self._datastore_hosts[datastore]:
-                        if self._host_status[self._domainid_hosts[host]]:
-                            status = self._host_status[self._domainid_hosts[host]]
-                            if "Bad" == status or\
-                                    ("Warning" == status and "Bad" != self._nearfailure) or\
-                                    ("Good" == status and "Bad" != self._nearfailure and
-                                     "Warning" != self._nearfailure):
-                                self._nearfailure = status
-                        if "Bad" == self._nearfailure:
-                            return self._nearfailure
-                return self._nearfailure
-        except Exception:
-            return None
+                return None
 
-    def get_host(self):
-        if self.target_host in self.target_event.get_conditional():
-            return self.target_host
-        else:
-            return None
+        def get_vm_name(self):
+            if self.target_info["vm_name"] and \
+                self.target_info["vm_name"].lower() in \
+                    self.target_event.get_conditional().lower():
+                return self.target_info["vm_name"]
+            elif "{host}" in self.target_event.get_conditional():
+                return ""
+            else:
+                return None
 
-    def get_vm_host(self):
-        vm_host_info = {}
-        for datastore in self._guesthosts_datastore[
-                self.target_host]:
-            for host in self._datastore_hosts[datastore]:
-                if self._host_info[self._domainid_hosts[host]]:
-                    target = self._host_info[self._domainid_hosts[host]]
-                    for diskinfo in target.values():
-                        if diskinfo["near_failure"] == self._nearfailure:
-                            vm_host_info.update(target)
-        return vm_host_info
+        def get_vm_host(self):
+            vm_host_info = {}
+            for datastore in self._guesthosts_datastore[
+                    self.target_host]:
+                for host in self._datastore_hosts[datastore]:
+                    if self._host_info[self._domainid_hosts[host]]:
+                        target = self._host_info[self._domainid_hosts[host]]
+                        for diskinfo in target.values():
+                            if diskinfo["near_failure"] == self._nearfailure:
+                                vm_host_info.update(target)
+            return vm_host_info
 
 
 class Neo4jTool(dpclient.Neo4jApi):
@@ -446,8 +535,12 @@ class Neo4jTool(dpclient.Neo4jApi):
     DiskProphet connector V1 API
     """
 
-    def __init__(self):
-        super(Neo4jTool, self).__init__()
+    if not ifttt:
+        def __init__(self, host="127.0.0.1"):
+            super(Neo4jTool, self).__init__(host)
+    else:
+        def __init__(self, host="127.0.0.1", port=7474, user="neo4j", password="na"):
+            super(Neo4jTool, self).__init__(host, port, user, password)
 
     def query_nodes(self, label="VMVirtualMachine", key="domainId", val=[],
                     cond_dict={}):
@@ -463,7 +556,10 @@ class Neo4jTool(dpclient.Neo4jApi):
             msg = "Neo4jApi Get no results ( {0}.{1} )".format(
                 self.__class__.__name__,
                 self.query_nodes.__name__)
-            _logger.error("Get no results from DiskProphet.")
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
             raise dpclient.DbError(msg)
         else:
             encoded_list = []
@@ -507,7 +603,10 @@ class Neo4jTool(dpclient.Neo4jApi):
             msg = "Neo4jApi Get no results ( {0}.{1} )".format(
                 self.__class__.__name__,
                 self.query_by_label_rels.__name__)
-            _logger.error("Get no results from DiskProphet.")
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
             raise dpclient.DbError(msg)
         else:
             labels_pool = {}
@@ -607,7 +706,10 @@ class Neo4jTool(dpclient.Neo4jApi):
             msg = "Neo4jApi Get no results ( {0}.{1} )".format(
                 self.__class__.__name__,
                 self._query_id_by_key.__name__)
-            _logger.error("Get no results from DiskProphet.")
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
             raise dpclient.DbError(msg)
         else:
             encoded_list = []
@@ -622,8 +724,12 @@ class InfluxdbTool(dpclient.InfluxdbApi):
     DiskProphet connector V1 API
     """
 
-    def __init__(self):
-        super(InfluxdbTool, self).__init__()
+    if not ifttt:
+        def __init__(self, host="127.0.0.1"):
+            super(InfluxdbTool, self).__init__(host)
+    else:
+        def __init__(self, host="127.0.0.1", port="8086", user="dpInfluxdb", password="DpPassw0rd"):
+            super(InfluxdbTool, self).__init__(host, port, user, password)
 
     def query_vm_host(self, composite_cmd="virtualmachine",
                       entry_list=None, group=None):
@@ -661,7 +767,10 @@ class InfluxdbTool(dpclient.InfluxdbApi):
                 " Your URL is {2}".format(
                     self.__class__.__name__,
                     self.query_data_detail_setup.__name__, self.url)
-            _logger.error("Get no results from DiskProphet.")
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
             raise dpclient.DbError(msg)
 
         else:
@@ -697,7 +806,10 @@ class InfluxdbTool(dpclient.InfluxdbApi):
                 " Your URL is {2}".format(
                     self.__class__.__name__,
                     self.query_data_detail_setup.__name__, self.url)
-            _logger.error("Get no results from DiskProphet.")
+            if not ifttt:
+                _logger.error("Get no results from DiskProphet.")
+            else:
+                print "Get no results from DiskProphet."
             raise dpclient.DbError(msg)
 
         for idx, val in enumerate(pre_result.get('disk_domain_id')):
@@ -721,10 +833,22 @@ class InfluxdbTool(dpclient.InfluxdbApi):
                 'disk_domain_id', 'host_domain_id', 'time']]
 
             for key in keyslist:
-                target.update({key: pre_result.get(key)[idx]})
+                target.update({key: [' '.join(pre_result.get(key)[idx])]})
 
         return pos_result
 
 
 if __name__ == '__main__':
-    pass
+    if ifttt:
+        try:
+            diskevent_conn = DiskEvent('*')
+            prediction_result = diskevent_conn.event_trigger()
+
+            if prediction_result:
+                for hostname, info in prediction_result.iteritems():
+                    for diskname, diskstatus in info.iteritems():
+                        print "host:{0}   disks:{1}   status:{2}  time:{3}".format(
+                            hostname, diskname,
+                            diskstatus["near_failure"], diskstatus["time"])
+        except dpclient.DbError as e:
+            print e.msg
