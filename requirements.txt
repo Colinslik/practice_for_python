@@ -2,7 +2,7 @@ multiprocessing
 pypiwin32
 requests
 urllib3
-winrm
+pywinrm
 croniter
 servicemanager
 tzlocal
