@@ -1,3 +1,6 @@
+# Use "pip freeze > requirements.txt" to create this file.
+# and "pip install -r requirements.txt" to run this file.
+
 altgraph==0.16.1
 appdirs==1.4.3
 asn1crypto==0.24.0
