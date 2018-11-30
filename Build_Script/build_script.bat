@@ -4,19 +4,33 @@ SET CURRENT=%~dp0
 SET BUILD_SCRIPT=build-service.bat
 
 IF [%1]==[] ( 
-	SET root=C:\pda
+	SET root=%CURRENT%..
 ) ELSE ( 
 	SET root=%1%
+)
+
+IF [%2]==[] (
+	SET WINPYTHON=c:\WinPython-64bit_for_PDA
+) ELSE (
+	SET WINPYTHON=%2%
 )
 
 SET PDA_PATH=%root%\service
 SET ORIGIN_BATCH=%PDA_PATH%\%BUILD_SCRIPT%
 SET NEW_BATCH=%PDA_PATH%\new_%BUILD_SCRIPT%
 
-SET BUILD_FILE_DRP=%PDA_PATH%\dist\pda_drp.exe
-SET BUILD_FILE_ARC=%PDA_PATH%\dist\pda_arc.exe
+FOR /f "skip=3 delims=" %%x in (%PDA_PATH%\..\buildenv.mk) do (set %%x)
 
-CALL %CURRENT%scripts\env.bat
+if not defined tag_name (
+set version_numbers=%CONFIG_VERSION_MAJOR%.%CONFIG_VERSION_MINOR%.%CONFIG_BUILD_NO%
+) else (
+set version_numbers=%tag_name%
+)
+
+SET BUILD_FILE_DRP=%PDA_PATH%\dist\pda_drp_%version_numbers%.exe
+SET BUILD_FILE_ARC=%PDA_PATH%\dist\pda_arc_%version_numbers%.exe
+
+CALL %WINPYTHON%\scripts\env.bat
 
 ECHO =====Environment variables=====
 ECHO %PATH%
