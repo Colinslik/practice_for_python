@@ -8,10 +8,10 @@ if exist "%topdir%\pda.spec" del "%topdir%\pda.spec" /F
 
 for /f "skip=3 delims=" %%x in (%topdir%\..\buildenv.mk) do (set %%x)
 
-if not defined BUILD_NUMBER (
+if not defined tag_name (
 set version_numbers=%CONFIG_VERSION_MAJOR%.%CONFIG_VERSION_MINOR%.%CONFIG_BUILD_NO%
 ) else (
-set version_numbers=%CONFIG_VERSION_MAJOR%.%CONFIG_VERSION_MINOR%.%BUILD_NUMBER%
+set version_numbers=%tag_name%
 )
 
 echo Arcserve>%topdir%\etc\application.conf
