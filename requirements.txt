@@ -44,7 +44,7 @@ requests-ntlm==1.1.0
 six==1.10.0
 sqlite-bro==0.8.11
 tzlocal==1.5.1
-urllib3==1.24.1
+urllib3==1.26.5
 wcwidth==0.1.7
 winpython==1.7.20170128
 xmltodict==0.11.0
