@@ -36,7 +36,7 @@ pypiwin32==223
 python-dateutil==2.7.5
 pythonnet==2.4.0.dev0
 pytz==2018.7
-pywin32==224
+pywin32==301
 pywin32-ctypes==0.2.0
 pywinrm==0.3.0
 requests==2.20.1
