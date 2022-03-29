@@ -21,7 +21,7 @@ jedi==0.10.0
 macholib==1.11
 ntlm-auth==1.2.0
 packaging==16.8
-paramiko==2.4.2
+paramiko==2.10.1
 pefile==2018.8.8
 prompt-toolkit==1.0.13
 ptpython==0.36
